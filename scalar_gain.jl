@@ -3,7 +3,7 @@ using Statistics
 using Random
 
 using Optim
-using ForwardDiff
+using Distributions
 
 #Random.seed!(1234)
 
@@ -15,7 +15,7 @@ A = 0.9
 H = 1.0
 J = 1000
 J0 = 100
-N = 100
+#N = 1000
 d = 1
 
 vd0 = m0 + sqrt(C0)*randn()
@@ -52,7 +52,11 @@ function misfit(v, y)
     return sum((y[j+1] - H*A*v[j])'*inv(Γ)*(y[j+1] - H*A*v[j]) for j=J0:J-1)
 end
 
-function KL_sum(m, C, K)
+function misfit_truth(v, vd)
+    return sum((vd[j+1] - v[j+1])'*(vd[j+1] - v[j+1]) for j=J0:J-1)
+end
+
+function KL_sum(m, C, K, N)
     return sum(KL_gaussian(mean((I - K*H)*A*(m[j-1] + sqrt(C[j-1])*randn()) + K*y[j] for i=1:N), C[j], A*m[j-1], Σ) for j=J0+1:J)
 end
 
@@ -68,6 +72,11 @@ function steady_state_gain()
     return K
 end
 
+function var_cost(K, N)
+    m, C = filtered(K)
+    return KL_sum(m, C, K, N) - mean(log_likelihood(m .+ sqrt.(C).*randn(J), y) for i=1:N)
+end
+
 function var_cost2(K)
     m, C = filtered(K)
     return KL_sum(m, C) - mean(log_likelihood(m .+ sqrt.(C).*randn(J), y) for i=1:N)
@@ -80,17 +89,25 @@ end
 
 function misfit_truth_cost(K)
     m, C = filtered(K)
-    return misfit(m, vd)
+    return misfit_truth(m, vd)
 end
 
 K_steady = steady_state_gain()
-K_opt = optimize(var_cost, 0.0f0, 1.0f0).minimizer
+misfit_err = mean([abs(optimize(misfit_truth_cost, -1.0f0, 1.5f0).minimizer - K_steady) for i=1:5])
+var_errs = zeros(5)
+for (j, N) in enumerate([2, 10, 50, 250, 1250])
+    println(N)
+    for i=1:5
+        K_opt = optimize(K->var_cost(K, N), 0.0f0, 1.0f0).minimizer
+        var_errs[j] += abs(K_opt - K_steady)/5
+    end
+end
 
-# g = x->ForwardDiff.derivative(var_cost, x)
+#g = x->ForwardDiff.derivative(K->var_cost(K, 100), x)
 
-# x = 0.4
-# α = 1e-5
-# for i=1:100
-#     x -= α*g(x)
-#     println(x)
-# end
+#x = 0.4
+#α = 1e-5
+#for i=1:100
+#    x -= α*g(x)
+#    println(x)
+#end
