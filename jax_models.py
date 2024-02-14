@@ -92,8 +92,8 @@ def generate_true_states(key, num_steps, n, x0, C0, H, Q, R, model_step, observa
             obs_state = np.dot(H, x_j)
             obs_noise = random.multivariate_normal(subkey, np.zeros(H.shape[0]), R)
             obs = obs.at[j].set(obs_state + obs_noise)
-        else: #grabs previous observation - careful not to treat as current
-            obs = obs.at[j].set(obs[j-1])
+        else: #non observations are nans
+            obs = obs.at[j].set(np.nan)
         
         x = x.at[j].set(x_j)
 
@@ -103,10 +103,8 @@ def generate_true_states(key, num_steps, n, x0, C0, H, Q, R, model_step, observa
 
 def visualize_observations(observations):
     observation_values = observations.T  # Transpose for plotting
-
     # Create a custom colormap
     cmap = LinearSegmentedColormap.from_list('CustomColormap', [(0, 'blue'), (0.5, 'white'), (1, 'red')])
-
     # Create a grid plot
     plt.figure(figsize=(12, 6))
     plt.imshow(observation_values, cmap=cmap, aspect='auto', interpolation='nearest', extent=[0, observations.shape[0], 0, observations.shape[1]])
@@ -114,8 +112,27 @@ def visualize_observations(observations):
     plt.xlabel('Time Step')
     plt.ylabel('State/Variable Number')
     plt.title('Observations Over Time')
-    
-  
-    
     plt.show()
 
+def plot_ensemble_mean_and_variance(states, observations, state_index, observation_interval, title_suffix=''):
+    time_steps = np.arange(states.shape[0])
+    state_mean = np.mean(states[:, :, state_index], axis=1)
+    state_std = np.std(states[:, :, state_index], axis=1)
+    plt.figure(figsize=(12, 8))
+    plt.plot(time_steps, state_mean, label='State Mean', color='orange')
+    plt.fill_between(time_steps,
+                     state_mean - 1.96 * state_std,
+                     state_mean + 1.96 * state_std,
+                     color='orange', alpha=0.3, label='95% Confidence Interval')
+    #Plot Observations
+    observed_time_steps = np.arange(0, len(observations), observation_interval)
+    observed_values = observations[observed_time_steps, state_index]
+    plt.scatter(observed_time_steps, observed_values, label='Observation', color='red', marker='x')
+
+    plt.title(f'State {state_index+1} Ensemble Mean and Variance {title_suffix}')
+    plt.xlabel('Time Step')
+    plt.ylabel(f'State {state_index+1} Value')
+    plt.legend()
+    plt.show()
+
+  
