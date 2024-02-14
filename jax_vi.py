@@ -8,49 +8,53 @@ from scipy.linalg import solve_discrete_are
 from tqdm import tqdm
 
 @jit
-def KL_gaussian(m1, C1, m2, C2):
+def KL_gaussian(n, m1, C1, m2, C2):
     """
     Computes the Kullback-Leibler divergence between two Gaussian distributions.
     m1, C1: Mean and covariance of the first Gaussian distribution.
     m2, C2: Mean and covariance of the second Gaussian distribution.
+    n: number of state variables
     """
     C2_inv = inv(C2)
     log_det_ratio = (jnp.log(jnp.linalg.eigvals(C2)).sum() - jnp.log(jnp.linalg.eigvals(C1)).sum()).real # log(det(C2) / det(C1)), works better with limited precision because the determinant is practically 0
     return 0.5 * (log_det_ratio - n + jnp.trace(C2_inv @ C1) + ((m2 - m1).T @ C2_inv @ (m2 - m1)))
 
 @jit
-def log_likelihood(v, y):
+def log_likelihood(v, y, J, J0, R, H):
     """
     v: State estimates.
     y: Observations.
+    J, J0: num_timesteps, spinup?
+    R, H: obs noise, obs operator
     """
     def log_likelihood_j(_, v_y):
         v_j, y_j = v_y
         error = y_j - H @ v_j
-        ll = error.T @ inv_R @ error
+        ll = error.T @ inv(R) @ error #will this cause a problem? originally used precalculated inv r
         return _, ll
     _, lls = scan(log_likelihood_j, None, (v[1:, :], y))
     sum_ll = sum(lls)
     return -0.5 * sum_ll - 0.5 * (J - J0) * jnp.log(2 * jnp.pi) - 0.5 * (J - J0) * jnp.log(det(R))
 
 @jit
-def KL_sum(m, C, K, key):
+def KL_sum(m, n, C, K, Q, J, step, N, key):
     """
     Computes the sum of KL divergences between the predicted and updated state distributions.
-    m: Estimated states.
+    m, n: Estimated states, number of state variables
     C: Covariance matrices of the state estimates.
-    K: Kalman gain matrix.
+    K, Q: Kalman gain matrix, model noise
+    J: number of timesteps
     N: Number of samples to average over for Monte Carlo approximation.
     """
-    def KL_j(_, m_C_y):
+    def KL_j(_, m_C_y): #what exactly is going on here?
         m_prev, m_curr, C_prev, C_curr, key = m_C_y
         key, *subkeys_inner = random.split(key, num=N)
         def inner_map(subkey):
             perturbed_state = m_prev + random.multivariate_normal(subkey, jnp.zeros(n), C_prev)
-            v_pred = state_transition_function(perturbed_state, dt, F)
+            v_pred = step(perturbed_state) #one model step
             return KL_gaussian(m_curr, C_curr, v_pred, Q)
 
-        mean_kl = jnp.mean(jax.lax.map(inner_map, jnp.vstack(subkeys_inner)), axis=0)
+        mean_kl = jnp.mean(jax.lax.map(inner_map, jnp.vstack(subkeys_inner)), axis=0)# why map and not vmap
         return _, mean_kl
 
     _, *subkeys = random.split(key, num=J+1)
@@ -61,11 +65,12 @@ def KL_sum(m, C, K, key):
     return kl_sum
 
 @jit
-def var_cost(K, key):
+def var_cost(K, filtered, y, N, key):
     """
     Computes the cost function for optimization, combining KL divergence and log-likelihood.
     K: Kalman gain matrix.
     N: Number of samples for Monte Carlo approximation in KL divergence.
+    y: observations
     """
     m, C = filtered(K)
     #print(jax.device_get(m), jax.device_get(C))
