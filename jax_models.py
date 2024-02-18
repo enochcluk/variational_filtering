@@ -90,6 +90,7 @@ def generate_true_states(key, num_steps, n, x0, H, Q, R, model_step, observation
     # Initialize the state with the initial condition based on x0 and C0
     x = np.zeros((num_steps, n))
     obs = np.zeros((num_steps, H.shape[0]))  # Adjust the shape based on H
+    print(type(x))
     x = x.at[0].set(x0)
 
     for j in range(1, num_steps):
@@ -161,8 +162,6 @@ def generate_gc_localization_matrix(N, localization_radius):
                 localization_matrix = localization_matrix.at[i, j].set(np.exp(-((min_modulo_distance / localization_radius) ** 2)))
 
     return localization_matrix
-
-import numpy as np
 
 #adapted from https://github.com/neuraloperator/markov_neural_operator/blob/main/data_generation/KS/ks.m
 

@@ -90,6 +90,7 @@ def generate_true_states(key, num_steps, n, x0, H, Q, R, model_step, observation
     # Initialize the state with the initial condition based on x0 and C0
     x = np.zeros((num_steps, n))
     obs = np.zeros((num_steps, H.shape[0]))  # Adjust the shape based on H
+    print(type(x))
     x = x.at[0].set(x0)
 
     for j in range(1, num_steps):
@@ -144,5 +145,58 @@ def plot_ensemble_mean_and_variance(states, observations, state_index, observati
     plt.ylabel(f'State {state_index+1} Value')
     plt.legend()
     plt.show()
+    
+def generate_gc_localization_matrix(N, localization_radius):
+    """
+    Generate the Gaspari-Cohn (GC) localization matrix for data assimilation.
+    :param N: Number of grid points/ discretization
+    :param localization_radius: Localization radius controlling the range of influence.
+    :return: GC localization matrix.
+    """
+    localization_matrix = np.zeros((N, N))
+    for i in range(N):
+        for j in range(N):
+            # Calculate the modulo distance between grid points i and j
+            min_modulo_distance = min(abs(i - j), N - abs(i - j))
+            if min_modulo_distance <= localization_radius:
+                localization_matrix = localization_matrix.at[i, j].set(np.exp(-((min_modulo_distance / localization_radius) ** 2)))
 
-  
+    return localization_matrix
+
+#adapted from https://github.com/neuraloperator/markov_neural_operator/blob/main/data_generation/KS/ks.m
+
+#Gaussian Random Field
+def GRF1(N, m, gamma, tau, sigma, type, L=1):
+    if type == "dirichlet":
+        m = 0
+
+    if type == "periodic":
+        my_const = 2 * np.pi / L
+    else:
+        my_const = np.pi
+
+    my_eigs = np.sqrt(2) * (abs(sigma) * ((my_const * (np.arange(1, N+1)))**2 + tau**2)**(-gamma/2))
+
+    if type == "dirichlet":
+        alpha = np.zeros(N)
+    else:
+        xi_alpha = np.random.randn(N)
+        alpha = my_eigs * xi_alpha
+
+    if type == "neumann":
+        beta = np.zeros(N)
+    else:
+        xi_beta = np.random.randn(N)
+        beta = my_eigs * xi_beta
+
+    a = alpha / 2
+    b = -beta / 2
+
+    c = np.concatenate([np.flipud(a) - np.flipud(b) * 1j, [m + 0j], a + b * 1j])
+
+    if type == "periodic":
+        # For simplicity, directly use numpy's FFT functions for trigonometric interpolation
+        return lambda x: np.fft.ifft(np.fft.fftshift(c)).real
+    else:
+        # Adjust for non-periodic, though this might need further refinement for exact Chebfun behavior
+        return lambda x: np.interp(x, np.linspace(-np.pi, np.pi, len(c)), np.fft.ifft(np.fft.fftshift(c)).real)
