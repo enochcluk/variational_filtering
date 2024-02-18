@@ -65,14 +65,13 @@ def KL_sum(m, n, C, K, Q, J, step, N, key):
     return kl_sum
 
 @jit
-def var_cost(K, filtered, y, N, key):
+def var_cost(K, m,C, y, N, key):
     """
     Computes the cost function for optimization, combining KL divergence and log-likelihood.
     K: Kalman gain matrix.
     N: Number of samples for Monte Carlo approximation in KL divergence.
     y: observations
     """
-    m, C = filtered(K)
     #print(jax.device_get(m), jax.device_get(C))
 
     key, *subkeys = random.split(key, num=N+1)
