@@ -144,22 +144,5 @@ def plot_ensemble_mean_and_variance(states, observations, state_index, observati
     plt.ylabel(f'State {state_index+1} Value')
     plt.legend()
     plt.show()
-    
-def generate_gc_localization_matrix(N, localization_radius):
-    """
-    Generate the Gaspari-Cohn (GC) localization matrix for data assimilation.
-    :param N: Number of grid points/ discretization
-    :param localization_radius: Localization radius controlling the range of influence.
-    :return: GC localization matrix.
-    """
-    localization_matrix = np.zeros((N, N))
-    for i in range(N):
-        for j in range(N):
-            # Calculate the modulo distance between grid points i and j
-            min_modulo_distance = min(abs(i - j), N - abs(i - j))
-            if min_modulo_distance <= localization_radius:
-                localization_matrix = localization_matrix.at[i, j].set(np.exp(-((min_modulo_distance / localization_radius) ** 2)))
-
-    return localization_matrix
 
   
