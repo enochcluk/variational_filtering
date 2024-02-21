@@ -22,13 +22,9 @@ def kuramoto_sivashinsky_step(x, dt, E, E2, Q, f1, f2, f3, g):
 
 @jit
 def lorenz96_step(x, F, dt):
-    def l96_inner_step(x, F):
-        return (np.roll(x, -1) - np.roll(x, 2)) * np.roll(x, -1) - x + F
-    return x + dt * l96_inner_step(x, F)
+    dxdt = (np.roll(x, -1) - np.roll(x, 2)) * np.roll(x, -1) - x + F
+    return x + dt * dxdt
 
-@jit
-def lorenz63_step(x, sigma, rho, beta, dt):
-    return lorenz63_step(x, self.sigma, self.rho, self.beta, self.dt)
 
 #models as classes
 class BaseModel:
@@ -90,7 +86,6 @@ def generate_true_states(key, num_steps, n, x0, H, Q, R, model_step, observation
     # Initialize the state with the initial condition based on x0 and C0
     x = np.zeros((num_steps, n))
     obs = np.zeros((num_steps, H.shape[0]))  # Adjust the shape based on H
-    print(type(x))
     x = x.at[0].set(x0)
 
     for j in range(1, num_steps):

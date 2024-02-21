@@ -8,7 +8,6 @@ import jax
 from jax import jit, numpy as jnp
 from jax.lax import scan
 from jax import jit, numpy as jnp
-from jax.lax import scan
 
 @jit
 def filter_step_linear(m_C_prev, y_curr, K,n, M, H, Q, R):
@@ -112,6 +111,7 @@ def ensrf_step(ensemble, n_ensemble, y, H, Q, R, localization_matrix, inflation)
 
     #ensemble = x_m.reshape((-1, 1)) + np.real(np.linalg.inv(sqrtm(np.eye(x_m.shape[0]) + P@H.T@np.linalg.inv(R)@H)))@A
     return ensemble #can pull covariance out of this, but should apply localization
+
 
 def ensrf_steps(model, n_ensemble, ensemble_init, n_timesteps, observations, observation_interval, H, Q, R, localization_matrix, inflation):
     """
