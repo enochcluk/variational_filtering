@@ -1,9 +1,10 @@
 import jax.numpy as np
 from jax import random
 from jax import jit
-from jax.scipy.linalg import svd
+from jax.scipy.linalg import inv, svd, eigh, det
 from jax.numpy.fft import fft, ifft
 import jax
+from functools import partial
 
 from jax import jit, numpy as jnp
 from jax.lax import scan
@@ -94,54 +95,44 @@ def apply_filtering_fixed_nonlinear(m0, C0, y, K, n, state_transition_function, 
 
 
 @jit
-def ensrf_step(ensemble, n_ensemble, y, H, Q, R, localization_matrix, inflation):
+def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation):
+    n_ensemble = ensemble.shape[1]
     x_m = np.mean(ensemble, axis=1)
+    I = np.eye(x_m.shape[0])
+
     A = ensemble - x_m.reshape((-1, 1))
-    Pf = inflation*A@A.T/(n_ensemble - 1)
-    #print(Pf) rank deficient when ensemble members less than state dimension (can't invert, determinant 0)
-    P = Pf * localization_matrix + Q # Element-wise multiplication for localization
+    Pf = inflation * A @ A.T / (n_ensemble - 1)
+    P = Pf * localization_matrix + Q  # Element-wise multiplication for localization
     K = P @ H.T @ np.linalg.inv(H @ P @ H.T + R)
-    # Update ensemble states
-    x_m += K@(y - H@x_m)
-    M = np.eye(x_m.shape[0]) + P @ H.T @ np.linalg.inv(R) @ H
-    U, s, Vh = svd(M)
-    s_inv_sqrt = np.diag(s**-0.5)
-    M_inv_sqrt = U @ s_inv_sqrt @ Vh
-    ensemble = x_m.reshape((-1, 1)) + np.real(M_inv_sqrt) @ A
+    P_updated = (I - K@H) @ P
+    x_m += K @ (y - H @ x_m)
+    M = I + P @ H.T @ np.linalg.inv(R) @ H
+    eigenvalues, eigenvectors = eigh(M)
+    inv_sqrt_eigenvalues = 1 / np.sqrt(eigenvalues)
+    Lambda_inv_sqrt = np.diag(inv_sqrt_eigenvalues)
+    M_inv_sqrt = eigenvectors @ Lambda_inv_sqrt @ eigenvectors.T
+    updated_ensemble = x_m.reshape((-1, 1)) + M_inv_sqrt @ A
+    return updated_ensemble, P_updated  # Now also returning P analysis
 
-    #ensemble = x_m.reshape((-1, 1)) + np.real(np.linalg.inv(sqrtm(np.eye(x_m.shape[0]) + P@H.T@np.linalg.inv(R)@H)))@A
-    return ensemble #can pull covariance out of this, but should apply localization
 
-
+@jit
 def ensrf_steps(model, n_ensemble, ensemble_init, n_timesteps, observations, observation_interval, H, Q, R, localization_matrix, inflation):
     """
     Deterministic Ensemble Square Root Filter generalized for any model.
-
-    :param model: Model function.
-    :param state_dim: Dimension of state.
-    :param n_ensemble: Number of ensemble members.
-    :param n_timesteps: Number of time steps.
-    :param dt: Time step size.
-    :param H: Observation matrix.
-    :param observations: Observations at each time step.
-    :param Q: Model noise covariance matrix.
-    :return: Array containing states.
     """
     model_vmap = jax.vmap(lambda v: model(v), in_axes=1, out_axes=1)
 
-    def inner(ensemble, t):
-        ensemble = model_vmap(ensemble)
+    def inner(carry, t):
+        ensemble = carry
+        ensemble_predicted = model_vmap(ensemble)
+        ensemble_updated, Pf_updated = ensrf_step(ensemble_predicted, observations[t, :], H, Q, R, localization_matrix, inflation)
+        return ensemble_updated, Pf_updated
 
-        ensemble = jax.lax.cond(t % observation_interval == 0,
-                                lambda _: ensrf_step(ensemble, n_ensemble,observations[t, :], H, Q, R,localization_matrix, inflation),
-                                lambda _: ensemble, 
-                                None)
+    # Perform the scan over timesteps with the initial ensemble
+    states, covariances = jax.lax.scan(inner, ensemble_init, np.arange(n_timesteps))
 
-        return ensemble, ensemble
+    return states, covariances
 
-    _, states = jax.lax.scan(inner, ensemble_init, np.arange(n_timesteps))
-
-    return states
 
 
 def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, observations, H, Q, R, dt):

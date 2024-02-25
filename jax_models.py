@@ -5,6 +5,10 @@ from sklearn.datasets import make_spd_matrix
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import jax
+from functools import partial
+from jax import lax, random
+
+
 
 @jit
 def rk4_step_lorenz96(x, F, dt):
@@ -51,7 +55,7 @@ class Lorenz63(BaseModel):
         self.rho = rho
         self.beta = beta
 
-    @jit
+    
     def step(self, x):
         x_dot = self.sigma * (x[1] - x[0])
         y_dot = x[0] * (self.rho - x[2]) - x[1]
@@ -86,34 +90,43 @@ class KuramotoSivashinsky(BaseModel):
         f3 = self.dt * np.real(np.mean((-4-3*LR-LR**2+np.exp(LR)*(4-LR))/LR**3, axis=1))
         g = -0.5j * k
         return k, E, E2, Q, f1, f2, f3, g
-
-    
+        
     def step(self, x):
         return kuramoto_sivashinsky_step(x, self.dt, self.E, self.E2, self.Q, self.f1, self.f2, self.f3, self.g)
 
 
+def step_function(carry, input):
+    key, x, observation_interval, H, Q, R, model_step, counter = carry
+    n = len(x)
+    key, subkey = random.split(key)
+    x_j = model_step(x)    
+    # Add process noise Q only at observation times using a conditional operation
+    def update_observation():
+        x_noise = x_j + random.multivariate_normal(subkey, np.zeros(n), Q)
+        obs_state = np.dot(H, x_noise)
+        obs_noise = random.multivariate_normal(subkey, np.zeros(H.shape[0]), R)
+        return obs_state + obs_noise  
+    def no_update():
+        return np.nan * np.ones(H.shape[0])  
+    # Conditional update based on the observation interval
+    obs = lax.cond(counter % observation_interval == 0,
+                   update_observation,
+                   no_update)
+    counter += 1    
+    carry = (key, x_j, observation_interval, H, Q, R, model_step, counter)
+    output = (x_j, obs)
+    return carry, output
+
+@partial(jit, static_argnums=(1, 2, 7))
 def generate_true_states(key, num_steps, n, x0, H, Q, R, model_step, observation_interval):
-    # Initialize the state with the initial condition based on x0 and C0
-    x = np.zeros((num_steps, n))
-    obs = np.zeros((num_steps, H.shape[0]))  # Adjust the shape based on H
-    x = x.at[0].set(x0)
+    initial_carry = (key, x0, observation_interval, H, Q, R, model_step, 1)
+    _, (xs, observations) = lax.scan(step_function, initial_carry, None, length=num_steps-1)
+    key, subkey = random.split(key)
+    initial_observation = H@x0 + random.multivariate_normal(subkey, np.zeros(n), R)
+    xs = np.vstack([x0[np.newaxis, :], xs])
+    observations = np.vstack([initial_observation[np.newaxis, :], observations])
+    return observations, xs
 
-    for j in range(1, num_steps):
-        key, subkey = random.split(key)
-        # Update state using the model step function
-        x_j = model_step(x[j-1])
-        # Add process noise Q only at observation times
-        if j % observation_interval == 0:
-            x_j = x_j + random.multivariate_normal(subkey, np.zeros(n), Q)
-            obs_state = np.dot(H, x_j)
-            obs_noise = random.multivariate_normal(subkey, np.zeros(H.shape[0]), R)
-            obs = obs.at[j].set(obs_state + obs_noise)
-        else: #non observations are nans
-            obs = obs.at[j].set(np.nan)
-        
-        x = x.at[j].set(x_j)
-
-    return obs, x
 
 
 
@@ -145,9 +158,9 @@ def plot_ensemble_mean_and_variance(states, observations, state_index, observati
     observed_values = observations[observed_time_steps, state_index]
     plt.scatter(observed_time_steps, observed_values, label='Observation', color='red', marker='x')
 
-    plt.title(f'State {state_index+1} Ensemble Mean and Variance {title_suffix}')
+    #plt.title(f'State {state_index+1} Ensemble Mean and Variance {title_suffix}')
     plt.xlabel('Time Step')
-    plt.ylabel(f'State {state_index+1} Value')
+    #plt.ylabel(f'State {state_index+1} Value')
     plt.legend()
     plt.show()
     
