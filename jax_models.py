@@ -7,6 +7,16 @@ from matplotlib.colors import LinearSegmentedColormap
 import jax
 
 @jit
+def rk4_step_lorenz96(x, F, dt):
+    f = lambda y: (np.roll(y, 1) - np.roll(y, -2)) * np.roll(y, -1) - y + F
+    k1 = dt * f(x)
+    k2 = dt * f(x + k1/2)
+    k3 = dt * f(x + k2/2)
+    k4 = dt * f(x + k3)
+
+    return x + 1/6 * (k1 + 2 * k2 + 2 * k3 + k4)
+
+@jit
 def kuramoto_sivashinsky_step(x, dt, E, E2, Q, f1, f2, f3, g):
     v = np.fft.fft(x)
     Nv = g * np.fft.fft(np.real(np.fft.ifft(v))**2)
@@ -20,10 +30,10 @@ def kuramoto_sivashinsky_step(x, dt, E, E2, Q, f1, f2, f3, g):
     x_next = np.real(np.fft.ifft(v_next))
     return x_next
 
-@jit
-def lorenz96_step(x, F, dt):
-    dxdt = (np.roll(x, -1) - np.roll(x, 2)) * np.roll(x, -1) - x + F
-    return x + dt * dxdt
+# @jit
+# def lorenz96_step(x, F, dt):
+#     #dxdt = lambda y: (np.roll(y, -1) - np.roll(y, 2)) * np.roll(y, -1) - y + F
+#     return rk4_step_lorenz96(x, F, dt)
 
 
 #models as classes
@@ -54,7 +64,7 @@ class Lorenz96(BaseModel):
         self.F = F
 
     def step(self, x):
-        return lorenz96_step(x, self.F, self.dt)
+        return rk4_step_lorenz96(x, self.F, self.dt)
 
 
 class KuramotoSivashinsky(BaseModel):
