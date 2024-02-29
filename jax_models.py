@@ -137,7 +137,7 @@ def visualize_observations(observations):
     cmap = LinearSegmentedColormap.from_list('CustomColormap', [(0, 'blue'), (0.5, 'white'), (1, 'red')])
     # Create a grid plot
     plt.figure(figsize=(12, 6))
-    plt.imshow(observation_values, cmap=cmap, aspect='auto', interpolation='nearest', extent=[0, observations.shape[0], 0, observations.shape[1]])
+    plt.imshow(observation_values, cmap=cmap, aspect='auto', extent=[0, observations.shape[0], 0, observations.shape[1]])
     plt.colorbar(label='Observation Value')
     plt.xlabel('Time Step')
     plt.ylabel('State/Variable Number')
