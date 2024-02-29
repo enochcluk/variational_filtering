@@ -1,5 +1,6 @@
 from jax.scipy.linalg import inv, det, svd
 import jax.numpy as np
+import jax.numpy as jnp
 from jax import random, jit
 from sklearn.datasets import make_spd_matrix
 import matplotlib.pyplot as plt
@@ -94,7 +95,7 @@ class KuramotoSivashinsky(BaseModel):
     def step(self, x):
         return kuramoto_sivashinsky_step(x, self.dt, self.E, self.E2, self.Q, self.f1, self.f2, self.f3, self.g)
 
-
+@jit
 def step_function(carry, input):
     key, x, observation_interval, H, Q, R, model_step, counter = carry
     n = len(x)
@@ -164,22 +165,21 @@ def plot_ensemble_mean_and_variance(states, observations, state_index, observati
     plt.legend()
     plt.show()
     
-def generate_gc_localization_matrix(N, localization_radius):
+
+
+@partial(jit, static_argnums=(0,))
+def generate_gc_localization_matrix(n, localization_radius):
     """
     Generate the Gaspari-Cohn (GC) localization matrix for data assimilation.
-    :param N: Number of grid points/ discretization
-    :param localization_radius: Localization radius controlling the range of influence.
-    :return: GC localization matrix.
     """
-    localization_matrix = np.zeros((N, N))
-    for i in range(N):
-        for j in range(N):
-            # Calculate the modulo distance between grid points i and j
-            min_modulo_distance = min(abs(i - j), N - abs(i - j))
-            if min_modulo_distance <= localization_radius:
-                localization_matrix = localization_matrix.at[i, j].set(np.exp(-((min_modulo_distance / localization_radius) ** 2)))
-
+    i = jnp.arange(n)[:, None]  
+    j = jnp.arange(n) 
+    min_modulo_distance = jnp.minimum(jnp.abs(i - j), n - jnp.abs(i - j))
+    mask = min_modulo_distance <= localization_radius
+    r = min_modulo_distance / localization_radius
+    localization_matrix = jnp.where(mask, jnp.exp(-(r ** 2)), 0)    # Apply exponential decay based on the mask
     return localization_matrix
+
 
 #adapted from https://github.com/neuraloperator/markov_neural_operator/blob/main/data_generation/KS/ks.m
 

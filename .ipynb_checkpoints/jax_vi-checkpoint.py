@@ -1,11 +1,12 @@
-import jax.numpy as np
-from jax import random, grad, jit, jacfwd, lax, vmap, jacrev
-from jax.scipy.linalg import inv, det
-from jax.lax import scan
 import jax
-from jax import jit
-from scipy.linalg import solve_discrete_are
+import jax.numpy as jnp
+from jax import random, grad, jit, jacfwd, lax, vmap, jacrev
+from jax.scipy.linalg import inv, eigh
+from jax.lax import scan
 from tqdm import tqdm
+from functools import partial
+
+
 """
 Variable Descriptions:
 
@@ -49,30 +50,44 @@ Functionality:
 def KL_gaussian(n, m1, C1, m2, C2):
     """
     Computes the Kullback-Leibler divergence between two Gaussian distributions.
-    m1, C1: Mean and covariance of the first Gaussian distribution.
-    m2, C2: Mean and covariance of the second Gaussian distribution.
-    n: number of state variables
     """
     C2_inv = inv(C2)
-    log_det_ratio = (jnp.log(jnp.linalg.eigvals(C2)).sum() - jnp.log(jnp.linalg.eigvals(C1)).sum()).real # log(det(C2) / det(C1)), works better with limited precision because the determinant is practically 0
+    log_det_ratio = (jnp.log(eigh(C2)[0]).sum() - jnp.log(eigh(C1)[0]).sum()).real 
+    # log(det(C2) / det(C1)), works better with limited precision because the determinant is practically 0
     return 0.5 * (log_det_ratio - n + jnp.trace(C2_inv @ C1) + ((m2 - m1).T @ C2_inv @ (m2 - m1)))
 
+# @jit
+# def log_likelihood(v, y, H, inv_R, R, J, J0):
+#     """
+#     Computes the log-likelihood of observations given state estimates.
+#     """
+#     def log_likelihood_j(_, v_y):
+#         v_j, y_j = v_y
+#         error = y_j - H @ v_j
+#         ll = error.T @ inv_R @ error
+#         return _, ll
+#     _, lls = scan(log_likelihood_j, None, (v[1:,:], y))
+#     sum_ll = jnp.sum(lls)
+#     return -0.5 * sum_ll - 0.5 * (J - J0) * jnp.log(2 * jnp.pi) - 0.5 * (J - J0) * jnp.log(jnp.linalg.det(R))
+
 @jit
-def log_likelihood(v, y, H, inv_R, R, J, J0):
+def log_likelihood(v, y, H, R, J, J0):
     """
-    Computes the log-likelihood of observations given state estimates.
+    Computes the log-likelihood of observations given state estimates as a sum.
+    Compares this to R, observation noise
     """
     def log_likelihood_j(_, v_y):
         v_j, y_j = v_y
         error = y_j - H @ v_j
-        ll = error.T @ inv_R @ error
+        ll = error.T @ inv(R) @ error
         return _, ll
-    _, lls = scan(log_likelihood_j, None, (v[1:, :], y))
-    sum_ll = sum(lls)
-    return -0.5 * sum_ll - 0.5 * (J - J0) * np.log(2 * np.pi) - 0.5 * (J - J0) * np.log(det(R))
+    _, lls = lax.scan(log_likelihood_j, None, (v, y))
+    sum_ll = jnp.nansum(lls)
+    return -0.5 * sum_ll - 0.5 * (J - J0) * jnp.log(2 * jnp.pi) - 0.5 * (J - sum(jnp.isnan(lls)) - J0) * jnp.linalg.slogdet(R)[1]
+    
 
-@jit
-def KL_sum(m, C, K, n, state_transition_function, Q, key, N):
+@partial(jit, static_argnums=(2,6))
+def KL_sum(m, C, n, state_transition_function, Q, key, N):
     """
     Computes the sum of KL divergences between the predicted and updated state distributions.
     """
@@ -80,25 +95,24 @@ def KL_sum(m, C, K, n, state_transition_function, Q, key, N):
         m_prev, m_curr, C_prev, C_curr, key = m_C_y
         key, *subkeys_inner = random.split(key, num=N)
         def inner_map(subkey):
-            perturbed_state = m_prev + random.multivariate_normal(subkey, np.zeros(n), C_prev)
+            perturbed_state = m_prev + random.multivariate_normal(subkey, jnp.zeros(n), C_prev)
             v_pred = state_transition_function(perturbed_state)
-            return KL_gaussian(m_curr, C_curr, v_pred, Q)
-        mean_kl = np.mean(np.lax.map(inner_map, np.array(subkeys_inner)), axis=0)
+            return KL_gaussian(n, m_curr, C_curr, v_pred, Q)
+        mean_kl = jnp.mean(vmap(inner_map)(jnp.array(subkeys_inner)), axis=0)
         return _, mean_kl
-    _, mean_kls = scan(KL_j, None, (m[:-1, :], m[1:, :], C[:-1, :, :], C[1:, :, :], np.array(random.split(key, num=m.shape[0]-1))))
-    kl_sum = sum(mean_kls)
+    _, mean_kls = scan(KL_j, None, (m[:-1, :], m[1:, :], C[:-1, :, :], C[1:, :, :], jnp.array(random.split(key, num=m.shape[0]-1))))
+    kl_sum = jnp.sum(mean_kls)
     return kl_sum
 
 @jit
 def var_cost(K, m0, C0, n, state_transition_function, Q, jacobian, H, R, y, key, N, J, J0, filtered_func, filter_step_func):
     """
     Computes the cost function for optimization, combining KL divergence and log-likelihood.
-        J, J0, H, inv_R, R, n: Parameters for log_likelihood calculation.
     """
-    m, C = filtered_func(K, y, m0, C0, n, state_transition_function, Q, jacobian, filter_step_func)
+    m, C = filtered_func(K, m0, C0, n, state_transition_function, Q, jacobian, H, R, y, filter_step_func)
     key, *subkeys = random.split(key, num=N+1)
-    log_likelihood_vals = np.lax.map(lambda subkey: log_likelihood(random.multivariate_normal(subkey, m, C), y, H, inv_R, R, J, J0), np.array(subkeys))
-    return (KL_sum(m, C, K, n, state_transition_function, Q, key, N) - np.mean(log_likelihood_vals))
+    log_likelihood_vals = vmap(lambda subkey: log_likelihood(vmap(lambda x: random.multivariate_normal(subkey, x, C))(m), y, H, inv(R), R, J, J0))(jnp.array(subkeys))
+    return (KL_sum(m, C, K, n, state_transition_function, Q, key, N) - jnp.mean(log_likelihood_vals))
 
 @jit
 def filter_step(m_C_prev, y_curr, K, n, state_transition_function, Q, jacobian, H, R):
@@ -108,9 +122,9 @@ def filter_step(m_C_prev, y_curr, K, n, state_transition_function, Q, jacobian, 
     m_prev, C_prev = m_C_prev
     m_pred = state_transition_function(m_prev)
     F_jac = jacobian(m_prev)
-    m_update = (np.eye(n) - K @ H) @ m_pred + K @ y_curr
+    m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
     C_pred = F_jac @ C_prev @ F_jac.T + Q
-    C_update = (np.eye(n) - K @ H) @ C_pred @ (np.eye(n) - K @ H).T + K @ R @ K.T
+    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T
     return (m_update, C_update), (m_update, C_update)
 
 @jit
@@ -118,7 +132,6 @@ def filtered(K, m0, C0, n, state_transition_function, Q, jacobian, H, R, y, filt
     """
     Applies the filtering process to estimate the system state over time.
     """
-    _, m_C = scan(lambda m_C_prev, y_curr: filter_step_func(m_C_prev, y_curr, K, n, state_transition_function, Q, jacobian, H, R)
-
+    _, m_C = scan(lambda m_C_prev, y_curr: filter_step_func(m_C_prev, y_curr, K, n, state_transition_function, Q, jacobian, H, R), (m0, C0), y)
     m, C = m_C
-    return np.vstack((m0, m)), np.vstack((C0.reshape(1, n, n), C))
+    return jnp.vstack((m0[jnp.newaxis, :], m)), jnp.concatenate((C0[jnp.newaxis, :, :], C), axis=0)
