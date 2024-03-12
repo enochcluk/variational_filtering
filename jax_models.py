@@ -95,12 +95,13 @@ class KuramotoSivashinsky(BaseModel):
     def step(self, x):
         return kuramoto_sivashinsky_step(x, self.dt, self.E, self.E2, self.Q, self.f1, self.f2, self.f3, self.g)
 
+
 @jit
 def step_function(carry, input):
     key, x, observation_interval, H, Q, R, model_step, counter = carry
     n = len(x)
     key, subkey = random.split(key)
-    x_j = model_step(x)    
+    x_j = model_step(x)
     # Add process noise Q only at observation times using a conditional operation
     def update_observation():
         x_noise = x_j + random.multivariate_normal(subkey, np.zeros(n), Q)
@@ -113,11 +114,11 @@ def step_function(carry, input):
     x_j, obs = lax.cond(counter % observation_interval == 0,
                    update_observation,
                    no_update)
-    counter += 1    
+    counter += 1
     carry = (key, x_j, observation_interval, H, Q, R, model_step, counter)
     output = (x_j, obs)
     return carry, output
-
+    
 @partial(jit, static_argnums=(1, 2, 7))
 def generate_true_states(key, num_steps, n, x0, H, Q, R, model_step, observation_interval):
     initial_carry = (key, x0, observation_interval, H, Q, R, model_step, 1)
