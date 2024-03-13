@@ -56,19 +56,6 @@ def KL_gaussian(n, m1, C1, m2, C2):
     # log(det(C2) / det(C1)), works better with limited precision because the determinant is practically 0
     return 0.5 * (log_det_ratio - n + jnp.trace(C2_inv @ C1) + ((m2 - m1).T @ C2_inv @ (m2 - m1)))
 
-# @jit
-# def log_likelihood(v, y, H, inv_R, R, J, J0):
-#     """
-#     Computes the log-likelihood of observations given state estimates.
-#     """
-#     def log_likelihood_j(_, v_y):
-#         v_j, y_j = v_y
-#         error = y_j - H @ v_j
-#         ll = error.T @ inv_R @ error
-#         return _, ll
-#     _, lls = scan(log_likelihood_j, None, (v[1:,:], y))
-#     sum_ll = jnp.sum(lls)
-#     return -0.5 * sum_ll - 0.5 * (J - J0) * jnp.log(2 * jnp.pi) - 0.5 * (J - J0) * jnp.log(jnp.linalg.det(R))
 
 @jit
 def log_likelihood(v, y, H, R, J, J0):

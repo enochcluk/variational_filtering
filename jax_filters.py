@@ -77,31 +77,42 @@ def old_ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation):
     return updated_ensemble, P_updated
 
 @jit
+def ledoit_wolf(P, shrinkage):
+    return (1 - shrinkage) * P + shrinkage * jnp.trace(P)/P.shape[0] * jnp.eye(P.shape[0])
+
+@jit
+def sqrtm(M):
+    eigenvalues, eigenvectors = jnp.linalg.eigh(M)
+    inv_sqrt_eigenvalues = jnp.sqrt(eigenvalues)
+    Lambda_inv_sqrt = jnp.diag(inv_sqrt_eigenvalues)
+    M_inv_sqrt = eigenvectors @ Lambda_inv_sqrt @ eigenvectors.T
+    return M_inv_sqrt.real
+
+
+@jit
 def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     n_ensemble = ensemble.shape[1]
     x_m = jnp.mean(ensemble, axis=1)
-    ensemble += random.multivariate_normal(key, jnp.zeros(ensemble.shape[0]), Q, (n_ensemble,)).T
+    #ensemble += random.multivariate_normal(key, jnp.zeros(ensemble.shape[0]), Q, (n_ensemble,)).T
     A = ensemble - x_m.reshape((-1, 1))
-    Pf = inflation*(A @ A.T) / (n_ensemble - 1)
+    A = A*inflation
+    Pf = (A @ A.T) / (n_ensemble - 1) + Q
     P = Pf * localization_matrix  # Element-wise multiplication for localization
     K = P @ H.T @ jnp.linalg.inv(H @ P @ H.T + R)
     x_m += K @ (y - H @ x_m)
-    M = jnp.eye(x_m.shape[0]) + P @ H.T @ jnp.linalg.inv(R) @ H
-    eigenvalues, eigenvectors = eigh(M)
-    inv_sqrt_eigenvalues = 1 / jnp.sqrt(eigenvalues)
-    Lambda_inv_sqrt = jnp.diag(inv_sqrt_eigenvalues)
-    M_inv_sqrt = eigenvectors @ Lambda_inv_sqrt @ eigenvectors.T
-    updated_ensemble = x_m.reshape((-1, 1)) + M_inv_sqrt @ A
-    updated_A = updated_ensemble - jnp.mean(updated_ensemble, axis=1).reshape((-1, 1))
-    updated_P = localization_matrix*(updated_A @ updated_A.T / (n_ensemble - 1))
-    return updated_ensemble, updated_P + jnp.eye(x_m.shape[0])*1e-5  #adds matrix to keep psd
+    #M = jnp.eye(x_m.shape[0]) + P @ H.T @ jnp.linalg.inv(R) @ H
+    #M_inv_sqrt = inv(jax.scipy.linalg.sqrtm(M).real)#inv_sqrtmh(M)
+    M_inv_sqrt = sqrtm(jnp.eye(x_m.shape[0]) - K@H)
+    updated_A = M_inv_sqrt @ A
+    updated_ensemble = x_m.reshape((-1, 1)) + updated_A
+    #updated_A = updated_ensemble - jnp.mean(updated_ensemble, axis=1).reshape((-1, 1))
+    updated_P = (updated_A @ updated_A.T / (n_ensemble - 1))
+    updated_P = ledoit_wolf(updated_P, 0.1) #shrinkage
+    return updated_ensemble, updated_P# + jnp.eye(x_m.shape[0])*1e-4 
 
 
 @partial(jit, static_argnums=(3))
 def ensrf_steps(state_transition_function, n_ensemble, ensemble_init, num_steps, observations, observation_interval, H, Q, R, localization_matrix, inflation, key):
-    """
-    Deterministic Ensemble Square Root Filter generalized for any model.
-    """
     model_vmap = jax.vmap(lambda v: state_transition_function(v), in_axes=1, out_axes=1)
     key, *subkeys = random.split(key, num=num_steps+1)
     subkeys = jnp.array(subkeys)
@@ -119,6 +130,7 @@ def ensrf_steps(state_transition_function, n_ensemble, ensemble_init, num_steps,
     _, output = jax.lax.scan(inner, (ensemble_init, covariance_init), jnp.arange(num_steps))
     ensembles, covariances = output
     return ensembles, covariances
+   
 
 @jit
 def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, observations, H, Q, R, dt):
