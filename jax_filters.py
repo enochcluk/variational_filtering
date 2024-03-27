@@ -5,7 +5,7 @@ from jax.scipy.linalg import inv, svd, eigh, det
 from jax.numpy.fft import fft, ifft
 from functools import partial
 
-@jit
+@partial(jit, static_argnums=(3))
 def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     """
     Apply a single forecast and Kalman filter step with fixed gain.
@@ -19,7 +19,8 @@ def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     
     return (m_update, C_update), (m_update, C_update)
 
-@jit
+
+@partial(jit, static_argnums=(4))
 def apply_filtering_fixed_linear(m0, C0, y, K, n, M, H, Q, R):
     """
     Applies the filtering process to estimate the system state over time.
@@ -30,7 +31,7 @@ def apply_filtering_fixed_linear(m0, C0, y, K, n, M, H, Q, R):
     partial_filter_step = lambda m_C_prev, y_curr: filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R)
     _, m_C = lax.scan(partial_filter_step, (m0, C0), y)
     m, C = m_C
-    return jnp.vstack((m0[None, :], m)), jnp.concatenate((C0[None, :, :], C), axis=0)
+    return m, C
 
 @jit
 def filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R):
@@ -55,7 +56,7 @@ def apply_filtering_fixed_nonlinear(m0, C0, y, K, n, state_transition_function, 
     partial_filter_step = lambda m_C_prev, y_curr: filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R)
     _, m_C = lax.scan(partial_filter_step, (m0, C0), y)
     m, C = m_C
-    return jnp.vstack((m0[None, :], m)), jnp.concatenate((C0[None, :, :], C), axis=0)
+    return m, C
 
 @jit
 def old_ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation):
