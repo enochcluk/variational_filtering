@@ -5,7 +5,7 @@ from jax.scipy.linalg import inv, svd, eigh, det
 from jax.numpy.fft import fft, ifft
 from functools import partial
 
-@jit
+@partial(jit, static_argnums=(3))
 def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     """
     Apply a single forecast and Kalman filter step with fixed gain.
@@ -19,7 +19,8 @@ def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     
     return (m_update, C_update), (m_update, C_update)
 
-@jit
+
+@partial(jit, static_argnums=(4))
 def apply_filtering_fixed_linear(m0, C0, y, K, n, M, H, Q, R):
     """
     Applies the filtering process to estimate the system state over time.
@@ -30,9 +31,9 @@ def apply_filtering_fixed_linear(m0, C0, y, K, n, M, H, Q, R):
     partial_filter_step = lambda m_C_prev, y_curr: filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R)
     _, m_C = lax.scan(partial_filter_step, (m0, C0), y)
     m, C = m_C
-    return jnp.vstack((m0[None, :], m)), jnp.concatenate((C0[None, :, :], C), axis=0)
+    return m, C
 
-@jit
+@partial(jit, static_argnums=(3))
 def filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R):
     """
     Apply a single forecast and Kalman filter step for a non-linear model.
@@ -47,7 +48,7 @@ def filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_func
     C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T
     return (m_update, C_update), (m_update, C_update)
 
-@jit
+@partial(jit, static_argnums=(4))
 def apply_filtering_fixed_nonlinear(m0, C0, y, K, n, state_transition_function, jacobian_function, H, Q, R):
     """
     Applies the filtering process to estimate the system state over time for a non-linear model.
@@ -55,26 +56,8 @@ def apply_filtering_fixed_nonlinear(m0, C0, y, K, n, state_transition_function, 
     partial_filter_step = lambda m_C_prev, y_curr: filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R)
     _, m_C = lax.scan(partial_filter_step, (m0, C0), y)
     m, C = m_C
-    return jnp.vstack((m0[None, :], m)), jnp.concatenate((C0[None, :, :], C), axis=0)
+    return m, C
 
-@jit
-def old_ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation):
-    n_ensemble = ensemble.shape[1]
-    x_m = jnp.mean(ensemble, axis=1)
-    I = jnp.eye(x_m.shape[0])
-    A = ensemble - x_m.reshape((-1, 1))
-    Pf = inflation * A @ A.T / (n_ensemble - 1)
-    P = Pf * localization_matrix + Q  # Element-wise multiplication for localization
-    K = P @ H.T @ jnp.linalg.inv(H @ P @ H.T + R)
-    P_updated = (I - K @ H) @ P
-    x_m += K @ (y - H @ x_m)
-    M = I + P @ H.T @ jnp.linalg.inv(R) @ H
-    eigenvalues, eigenvectors = eigh(M)
-    inv_sqrt_eigenvalues = 1 / jnp.sqrt(eigenvalues)
-    Lambda_inv_sqrt = jnp.diag(inv_sqrt_eigenvalues)
-    M_inv_sqrt = eigenvectors @ Lambda_inv_sqrt @ eigenvectors.T
-    updated_ensemble = x_m.reshape((-1, 1)) + M_inv_sqrt @ A
-    return updated_ensemble, P_updated
 
 @jit
 def ledoit_wolf(P, shrinkage):
