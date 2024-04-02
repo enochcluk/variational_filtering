@@ -104,10 +104,10 @@ def step_function(carry, input):
     x_j = model_step(x)
     # Add process noise Q only at observation times using a conditional operation
     def update_observation():
-        x_noise = x_j + random.multivariate_normal(subkey, np.zeros(n), Q)
+        x_noise = x_j + random.multivariate_normal(key, np.zeros(n), Q)
         obs_state = np.dot(H, x_noise)
         obs_noise = random.multivariate_normal(subkey, np.zeros(H.shape[0]), R)
-        return x_noise, obs_state + obs_noise  
+        return x_noise, obs_state + obs_noise
     def no_update():
         return x_j, np.nan * np.ones(H.shape[0])  
     # Conditional update based on the observation interval
