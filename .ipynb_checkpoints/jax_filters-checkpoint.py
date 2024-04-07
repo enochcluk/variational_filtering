@@ -15,7 +15,7 @@ def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     m_pred = M @ m_prev
     C_pred = M @ C_prev @ M.T + Q
     m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
-    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T
+    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #we discard this term as we look for covariance wrt true filter, not wrt truth
     
     return (m_update, C_update), (m_update, C_update)
 
@@ -45,8 +45,9 @@ def filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_func
     F_jac = jacobian_function(m_prev)
     m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
     C_pred = F_jac @ C_prev @ F_jac.T + Q
-    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T
+    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #no discard yet
     return (m_update, C_update), (m_update, C_update)
+
 
 @partial(jit, static_argnums=(4))
 def apply_filtering_fixed_nonlinear(m0, C0, y, K, n, state_transition_function, jacobian_function, H, Q, R):
@@ -114,32 +115,27 @@ def ensrf_steps(state_transition_function, n_ensemble, ensemble_init, num_steps,
     ensembles, covariances = output
     return ensembles, covariances
    
+@jit
+def kalman_step(state, observation, params):
+    m_prev, C_prev = state
+    state_transition_function, jacobian_function, H, Q, R = params
+    m_pred = state_transition_function(m_prev)
+    F_jac = jacobian_function(m_prev)
+    C_pred = F_jac @ C_prev @ F_jac.T + Q
+    S = H @ C_pred @ H.T + R
+    K_curr = C_pred @ H.T @ jnp.linalg.inv(S)
+    m_update = m_pred + K_curr @ (observation - H @ m_pred)
+    C_update = (jnp.eye(H.shape[1]) - K_curr @ H) @ C_pred
+    
+    return (m_update, C_update), (m_update, C_update, K_curr)
 
 @jit
-def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, observations, H, Q, R, dt):
-    """
-    Runs the Kalman filter process to update the state estimate and Kalman gain K at each step.
-    """
-    n = m0.shape[0]
-    num_steps = observations.shape[0]
-    m = jnp.zeros((num_steps, n))
-    C = jnp.zeros((num_steps, n, n))
-    K = jnp.zeros((num_steps, n, n))
-    m_prev = m0
-    C_prev = C0
+def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, observations, H, Q, R):
+    params = (state_transition_function, jacobian_function, H, Q, R)
+    initial_state = (m0, C0)
 
-    for i in range(num_steps):
-        m_pred = state_transition_function(m_prev)
-        F_jac = jacobian_function(m_pred)
-        C_pred = F_jac @ C_prev @ F_jac.T + Q
-        S = H @ C_pred @ H.T + R
-        K_curr = C_pred @ H.T @ jnp.linalg.inv(S)
-        m_update = m_pred + K_curr @ (observations[i] - H @ m_pred)
-        C_update = (jnp.eye(n) - K_curr @ H) @ C_pred
-        m = m.at[i, :].set(m_update)
-        C = C.at[i, :, :].set(C_update)
-        K = K.at[i, :, :].set(K_curr)
-        m_prev = m_update
-        C_prev = C_update
-
+    # Execute `lax.scan` over the sequence of observations
+    _, (m, C, K) = lax.scan(lambda state, obs: kalman_step(state, obs, params),
+                            initial_state, observations)
+    
     return m, C, K

@@ -15,7 +15,7 @@ def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     m_pred = M @ m_prev
     C_pred = M @ C_prev @ M.T + Q
     m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
-    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T
+    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #we discard this term as we look for covariance wrt true filter, not wrt truth
     
     return (m_update, C_update), (m_update, C_update)
 
@@ -45,7 +45,7 @@ def filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_func
     F_jac = jacobian_function(m_prev)
     m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
     C_pred = F_jac @ C_prev @ F_jac.T + Q
-    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T
+    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #no discard yet
     return (m_update, C_update), (m_update, C_update)
 
 
