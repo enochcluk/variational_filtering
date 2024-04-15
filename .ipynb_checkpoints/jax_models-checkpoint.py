@@ -1,5 +1,4 @@
 from jax.scipy.linalg import inv, det, svd
-import jax.numpy as np
 import jax.numpy as jnp
 from jax import random, jit
 from sklearn.datasets import make_spd_matrix
@@ -13,7 +12,7 @@ from jax import lax, random
 
 @jit
 def rk4_step_lorenz96(x, F, dt):
-    f = lambda y: (np.roll(y, 1) - np.roll(y, -2)) * np.roll(y, -1) - y + F
+    f = lambda y: (jnp.roll(y, 1) - jnp.roll(y, -2)) * jnp.roll(y, -1) - y + F
     k1 = dt * f(x)
     k2 = dt * f(x + k1/2)
     k3 = dt * f(x + k2/2)
@@ -23,21 +22,21 @@ def rk4_step_lorenz96(x, F, dt):
 
 @jit
 def kuramoto_sivashinsky_step(x, dt, E, E2, Q, f1, f2, f3, g):
-    v = np.fft.fft(x)
-    Nv = g * np.fft.fft(np.real(np.fft.ifft(v))**2)
+    v = jnp.fft.fft(x)
+    Nv = g * jnp.fft.fft(jnp.real(jnp.fft.ifft(v))**2)
     a = E2 * v + Q * Nv
-    Na = g * np.fft.fft(np.real(np.fft.ifft(a))**2)
+    Na = g * jnp.fft.fft(jnp.real(jnp.fft.ifft(a))**2)
     b = E2 * v + Q * Na
-    Nb = g * np.fft.fft(np.real(np.fft.ifft(b))**2)
+    Nb = g * jnp.fft.fft(jnp.real(jnp.fft.ifft(b))**2)
     c = E2 * a + Q * (2*Nb - Nv)
-    Nc = g * np.fft.fft(np.real(np.fft.ifft(c))**2)
+    Nc = g * jnp.fft.fft(jnp.real(jnp.fft.ifft(c))**2)
     v_next = E * v + Nv * f1 + 2 * (Na + Nb) * f2 + Nc * f3
-    x_next = np.real(np.fft.ifft(v_next))
+    x_next = jnp.real(jnp.fft.ifft(v_next))
     return x_next
 
 # @jit
 # def lorenz96_step(x, F, dt):
-#     #dxdt = lambda y: (np.roll(y, -1) - np.roll(y, 2)) * np.roll(y, -1) - y + F
+#     #dxdt = lambda y: (jnp.roll(y, -1) - jnp.roll(y, 2)) * jnp.roll(y, -1) - y + F
 #     return rk4_step_lorenz96(x, F, dt)
 
 
@@ -61,7 +60,7 @@ class Lorenz63(BaseModel):
         x_dot = self.sigma * (x[1] - x[0])
         y_dot = x[0] * (self.rho - x[2]) - x[1]
         z_dot = x[0] * x[1] - self.beta * x[2]
-        return x + self.dt * np.array([x_dot, y_dot, z_dot])
+        return x + self.dt * jnp.array([x_dot, y_dot, z_dot])
 
 class Lorenz96(BaseModel):
     def __init__(self, dt=0.01, F=8.0):
@@ -79,22 +78,21 @@ class KuramotoSivashinsky(BaseModel):
         self.k, self.E, self.E2, self.Q, self.f1, self.f2, self.f3, self.g = self.precompute_constants()
 
     def precompute_constants(self):
-        k = (2 * np.pi / self.l) * np.concatenate([np.arange(0, self.s//2), np.array([0]), np.arange(-self.s//2+1, 0)])
+        k = (2 * jnp.pi / self.l) * jnp.concatenate([jnp.arange(0, self.s//2), jnp.array([0]), jnp.arange(-self.s//2+1, 0)])
         L = k**2 - k**4
-        E = np.exp(self.dt*L)
-        E2 = np.exp(self.dt*L/2)
-        r = np.exp(1j * np.pi * (np.arange(1, self.M+1)-.5) / self.M)
-        LR = self.dt * np.tile(L, (self.M, 1)).T + np.tile(r, (self.s, 1))
-        Q = self.dt * np.real(np.mean((np.exp(LR/2)-1)/LR, axis=1))
-        f1 = self.dt * np.real(np.mean((-4-LR+np.exp(LR)*(4-3*LR+LR**2))/LR**3, axis=1))
-        f2 = self.dt * np.real(np.mean((2+LR+np.exp(LR)*(-2+LR))/LR**3, axis=1))
-        f3 = self.dt * np.real(np.mean((-4-3*LR-LR**2+np.exp(LR)*(4-LR))/LR**3, axis=1))
+        E = jnp.exp(self.dt*L)
+        E2 = jnp.exp(self.dt*L/2)
+        r = jnp.exp(1j * jnp.pi * (jnp.arange(1, self.M+1)-.5) / self.M)
+        LR = self.dt * jnp.tile(L, (self.M, 1)).T + jnp.tile(r, (self.s, 1))
+        Q = self.dt * jnp.real(jnp.mean((jnp.exp(LR/2)-1)/LR, axis=1))
+        f1 = self.dt * jnp.real(jnp.mean((-4-LR+jnp.exp(LR)*(4-3*LR+LR**2))/LR**3, axis=1))
+        f2 = self.dt * jnp.real(jnp.mean((2+LR+jnp.exp(LR)*(-2+LR))/LR**3, axis=1))
+        f3 = self.dt * jnp.real(jnp.mean((-4-3*LR-LR**2+jnp.exp(LR)*(4-LR))/LR**3, axis=1))
         g = -0.5j * k
         return k, E, E2, Q, f1, f2, f3, g
         
     def step(self, x):
         return kuramoto_sivashinsky_step(x, self.dt, self.E, self.E2, self.Q, self.f1, self.f2, self.f3, self.g)
-
 
 @jit
 def step_function(carry, input):
@@ -102,33 +100,39 @@ def step_function(carry, input):
     n = len(x)
     key, subkey = random.split(key)
     x_j = model_step(x)
+
     # Add process noise Q only at observation times using a conditional operation
     def update_observation():
-        x_noise = x_j + random.multivariate_normal(key, np.zeros(n), Q)
-        obs_state = np.dot(H, x_noise)
-        obs_noise = random.multivariate_normal(subkey, np.zeros(H.shape[0]), R)
+        x_noise = x_j + random.multivariate_normal(key, jnp.zeros(n), Q)
+        obs_state = jnp.dot(H, x_noise)
+        # Adjust noise dimension to the number of observed states
+        obs_noise = random.multivariate_normal(subkey, jnp.zeros(H.shape[0]), R[:H.shape[0], :H.shape[0]]) #should not need this, but enforces R is correct shape
         return x_noise, obs_state + obs_noise
+
     def no_update():
-        return x_j, np.nan * np.ones(H.shape[0])  
+        # Return a vector of NaNs matching the number of observed states
+        return x_j, jnp.nan * jnp.ones(H.shape[0])
+
     # Conditional update based on the observation interval
     x_j, obs = lax.cond(counter % observation_interval == 0,
-                   update_observation,
-                   no_update)
+                        update_observation,
+                        no_update)
     counter += 1
     carry = (key, x_j, observation_interval, H, Q, R, model_step, counter)
     output = (x_j, obs)
     return carry, output
-    
+
+
 @partial(jit, static_argnums=(1, 2, 7))
 def generate_true_states(key, num_steps, n, x0, H, Q, R, model_step, observation_interval):
     initial_carry = (key, x0, observation_interval, H, Q, R, model_step, 1)
     _, (xs, observations) = lax.scan(step_function, initial_carry, None, length=num_steps-1)
     key, subkey = random.split(key)
-    initial_observation = H@x0 + random.multivariate_normal(subkey, np.zeros(n), R)
-    xs = np.vstack([x0[np.newaxis, :], xs])
-    observations = np.vstack([initial_observation[np.newaxis, :], observations])
+    # Match the noise dimension to the observation matrix's output dimension
+    initial_observation = H @ x0 + random.multivariate_normal(subkey, jnp.zeros(H.shape[0]), R[:H.shape[0], :H.shape[0]])
+    xs = jnp.vstack([x0[jnp.newaxis, :], xs])
+    observations = jnp.vstack([initial_observation[jnp.newaxis, :], observations])
     return observations, xs
-
 
 
 
@@ -136,7 +140,6 @@ def visualize_observations(observations):
     observation_values = observations.T  # Transpose for plotting
     # Create a custom colormap
     cmap = LinearSegmentedColormap.from_list('CustomColormap', [(0, 'blue'), (0.5, 'white'), (1, 'red')])
-    # Create a grid plot
     plt.figure(figsize=(12, 6))
     plt.imshow(observation_values, cmap=cmap, aspect='auto', extent=[0, observations.shape[0], 0, observations.shape[1]])
     plt.colorbar(label='Observation Value')
@@ -146,9 +149,9 @@ def visualize_observations(observations):
     plt.show()
 
 def plot_ensemble_mean_and_variance(states, observations, state_index, observation_interval, title_suffix=''):
-    time_steps = np.arange(states.shape[0])
-    state_mean = np.mean(states[:, :, state_index], axis=1)
-    state_std = np.std(states[:, :, state_index], axis=1)
+    time_steps = jnp.arange(states.shape[0])
+    state_mean = jnp.mean(states[:, :, state_index], axis=1)
+    state_std = jnp.std(states[:, :, state_index], axis=1)
     plt.figure(figsize=(12, 8))
     plt.plot(time_steps, state_mean, label='State Mean', color='orange')
     plt.fill_between(time_steps,
@@ -156,7 +159,7 @@ def plot_ensemble_mean_and_variance(states, observations, state_index, observati
                      state_mean + 1.96 * state_std,
                      color='orange', alpha=0.3, label='95% Confidence Interval')
     #Plot Observations
-    observed_time_steps = np.arange(0, len(observations), observation_interval)
+    observed_time_steps = jnp.arange(0, len(observations), observation_interval)
     observed_values = observations[observed_time_steps, state_index]
     plt.scatter(observed_time_steps, observed_values, label='Observation', color='red', marker='x')
 
@@ -190,32 +193,32 @@ def GRF1(N, m, gamma, tau, sigma, type, L=1):
         m = 0
 
     if type == "periodic":
-        my_const = 2 * np.pi / L
+        my_const = 2 * jnp.pi / L
     else:
-        my_const = np.pi
+        my_const = jnp.pi
 
-    my_eigs = np.sqrt(2) * (abs(sigma) * ((my_const * (np.arange(1, N+1)))**2 + tau**2)**(-gamma/2))
+    my_eigs = jnp.sqrt(2) * (abs(sigma) * ((my_const * (jnp.arange(1, N+1)))**2 + tau**2)**(-gamma/2))
 
     if type == "dirichlet":
-        alpha = np.zeros(N)
+        alpha = jnp.zeros(N)
     else:
-        xi_alpha = np.random.randn(N)
+        xi_alpha = jnp.random.randn(N)
         alpha = my_eigs * xi_alpha
 
     if type == "neumann":
-        beta = np.zeros(N)
+        beta = jnp.zeros(N)
     else:
-        xi_beta = np.random.randn(N)
+        xi_beta = jnp.random.randn(N)
         beta = my_eigs * xi_beta
 
     a = alpha / 2
     b = -beta / 2
 
-    c = np.concatenate([np.flipud(a) - np.flipud(b) * 1j, [m + 0j], a + b * 1j])
+    c = jnp.concatenate([jnp.flipud(a) - jnp.flipud(b) * 1j, [m + 0j], a + b * 1j])
 
     if type == "periodic":
         # For simplicity, directly use numpy's FFT functions for trigonometric interpolation
-        return lambda x: np.fft.ifft(np.fft.fftshift(c)).real
+        return lambda x: jnp.fft.ifft(jnp.fft.fftshift(c)).real
     else:
         # Adjust for non-periodic, though this might need further refinement for exact Chebfun behavior
-        return lambda x: np.interp(x, np.linspace(-np.pi, np.pi, len(c)), np.fft.ifft(np.fft.fftshift(c)).real)
+        return lambda x: jnp.interp(x, jnp.linspace(-jnp.pi, jnp.pi, len(c)), jnp.fft.ifft(jnp.fft.fftshift(c)).real)

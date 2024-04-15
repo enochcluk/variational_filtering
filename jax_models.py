@@ -94,40 +94,45 @@ class KuramotoSivashinsky(BaseModel):
     def step(self, x):
         return kuramoto_sivashinsky_step(x, self.dt, self.E, self.E2, self.Q, self.f1, self.f2, self.f3, self.g)
 
-
 @jit
-def step_function(carry, ijnput):
+def step_function(carry, input):
     key, x, observation_interval, H, Q, R, model_step, counter = carry
     n = len(x)
     key, subkey = random.split(key)
     x_j = model_step(x)
+
     # Add process noise Q only at observation times using a conditional operation
     def update_observation():
         x_noise = x_j + random.multivariate_normal(key, jnp.zeros(n), Q)
         obs_state = jnp.dot(H, x_noise)
-        obs_noise = random.multivariate_normal(subkey, jnp.zeros(H.shape[0]), R)
+        # Adjust noise dimension to the number of observed states
+        obs_noise = random.multivariate_normal(subkey, jnp.zeros(H.shape[0]), R[:H.shape[0], :H.shape[0]]) #should not need this, but enforces R is correct shape
         return x_noise, obs_state + obs_noise
+
     def no_update():
-        return x_j, jnp.nan * jnp.ones(H.shape[0])  
+        # Return a vector of NaNs matching the number of observed states
+        return x_j, jnp.nan * jnp.ones(H.shape[0])
+
     # Conditional update based on the observation interval
     x_j, obs = lax.cond(counter % observation_interval == 0,
-                   update_observation,
-                   no_update)
+                        update_observation,
+                        no_update)
     counter += 1
     carry = (key, x_j, observation_interval, H, Q, R, model_step, counter)
     output = (x_j, obs)
     return carry, output
-    
+
+
 @partial(jit, static_argnums=(1, 2, 7))
 def generate_true_states(key, num_steps, n, x0, H, Q, R, model_step, observation_interval):
     initial_carry = (key, x0, observation_interval, H, Q, R, model_step, 1)
     _, (xs, observations) = lax.scan(step_function, initial_carry, None, length=num_steps-1)
     key, subkey = random.split(key)
-    initial_observation = H@x0 + random.multivariate_normal(subkey, jnp.zeros(n), R)
+    # Match the noise dimension to the observation matrix's output dimension
+    initial_observation = H @ x0 + random.multivariate_normal(subkey, jnp.zeros(H.shape[0]), R[:H.shape[0], :H.shape[0]])
     xs = jnp.vstack([x0[jnp.newaxis, :], xs])
     observations = jnp.vstack([initial_observation[jnp.newaxis, :], observations])
     return observations, xs
-
 
 
 
@@ -135,7 +140,6 @@ def visualize_observations(observations):
     observation_values = observations.T  # Transpose for plotting
     # Create a custom colormap
     cmap = LinearSegmentedColormap.from_list('CustomColormap', [(0, 'blue'), (0.5, 'white'), (1, 'red')])
-    # Create a grid plot
     plt.figure(figsize=(12, 6))
     plt.imshow(observation_values, cmap=cmap, aspect='auto', extent=[0, observations.shape[0], 0, observations.shape[1]])
     plt.colorbar(label='Observation Value')
