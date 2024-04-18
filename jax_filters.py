@@ -15,7 +15,7 @@ def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     m_pred = M @ m_prev
     C_pred = M @ C_prev @ M.T + Q
     m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
-    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #we discard this term as we look for covariance wrt true filter, not wrt truth
+    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #we discard this term if we want to look for covariance wrt true filter, not wrt truth
     
     return (m_update, C_update), (m_update, C_update)
 
@@ -65,7 +65,7 @@ def ledoit_wolf(P, shrinkage):
     return (1 - shrinkage) * P + shrinkage * jnp.trace(P)/P.shape[0] * jnp.eye(P.shape[0])
 
 @jit
-def sqrtm(M):
+def invsqrtm(M):
     eigenvalues, eigenvectors = jnp.linalg.eigh(M)
     inv_sqrt_eigenvalues = jnp.sqrt(eigenvalues)
     Lambda_inv_sqrt = jnp.diag(inv_sqrt_eigenvalues)
@@ -77,22 +77,18 @@ def sqrtm(M):
 def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     n_ensemble = ensemble.shape[1]
     x_m = jnp.mean(ensemble, axis=1)
-    #ensemble += random.multivariate_normal(key, jnp.zeros(ensemble.shape[0]), Q, (n_ensemble,)).T
     A = ensemble - x_m.reshape((-1, 1))
     A = A*inflation
     Pf = (A @ A.T) / (n_ensemble - 1) + Q
     P = Pf * localization_matrix  # Element-wise multiplication for localization
     K = P @ H.T @ jnp.linalg.inv(H @ P @ H.T + R)
     x_m += K @ (y - H @ x_m)
-    #M = jnp.eye(x_m.shape[0]) + P @ H.T @ jnp.linalg.inv(R) @ H
-    #M_inv_sqrt = inv(jax.scipy.linalg.sqrtm(M).real)#inv_sqrtmh(M)
-    M_inv_sqrt = sqrtm(jnp.eye(x_m.shape[0]) - K@H)
+    M_inv_sqrt = invsqrtm(jnp.eye(x_m.shape[0]) - K@H)
     updated_A = M_inv_sqrt @ A
     updated_ensemble = x_m.reshape((-1, 1)) + updated_A
-    #updated_A = updated_ensemble - jnp.mean(updated_ensemble, axis=1).reshape((-1, 1))
     updated_P = (updated_A @ updated_A.T / (n_ensemble - 1))
     updated_P = ledoit_wolf(updated_P, 0.1) #shrinkage
-    return updated_ensemble, updated_P# + jnp.eye(x_m.shape[0])*1e-4 
+    return updated_ensemble, updated_P
 
 
 @partial(jit, static_argnums=(3))
