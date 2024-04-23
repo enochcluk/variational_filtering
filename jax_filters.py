@@ -79,8 +79,8 @@ def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     x_m = jnp.mean(ensemble, axis=1)
     A = ensemble - x_m.reshape((-1, 1))
     A = A*inflation
-    Pf = (A @ A.T) / (n_ensemble - 1) + Q
-    P = Pf * localization_matrix  # Element-wise multiplication for localization
+    Pf = localization_matrix*(A @ A.T) / (n_ensemble - 1) + Q
+    P = Pf  # Element-wise multiplication for localization
     K = P @ H.T @ jnp.linalg.inv(H @ P @ H.T + R)
     x_m += K @ (y - H @ x_m)
     M_inv_sqrt = invsqrtm(jnp.eye(x_m.shape[0]) - K@H)
@@ -88,6 +88,7 @@ def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     updated_ensemble = x_m.reshape((-1, 1)) + updated_A
     updated_P = (updated_A @ updated_A.T / (n_ensemble - 1))
     updated_P = ledoit_wolf(updated_P, 0.1) #shrinkage
+    #updated_P = localization_matrix * updated_P
     return updated_ensemble, updated_P
 
 

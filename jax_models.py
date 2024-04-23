@@ -181,7 +181,8 @@ def generate_gc_localization_matrix(n, localization_radius):
     min_modulo_distance = jnp.minimum(jnp.abs(i - j), n - jnp.abs(i - j))
     mask = min_modulo_distance <= localization_radius
     r = min_modulo_distance / localization_radius
-    localization_matrix = jnp.where(mask, jnp.exp(-(r ** 2)), 0)    # Apply exponential decay based on the mask
+    localization_matrix = jnp.exp(-(r**2))
+    #localization_matrix = jnp.where(mask, jnp.exp(-(r ** 2)), 0) # Apply exponential decay based on the mask
     return localization_matrix
 
 
