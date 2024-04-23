@@ -15,7 +15,7 @@ def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     m_pred = M @ m_prev
     C_pred = M @ C_prev @ M.T + Q
     m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
-    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #we discard this term if we want to look for covariance wrt true filter, not wrt truth
+    C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #+ K @ H @ Q @ (K @ H).T
     
     return (m_update, C_update), (m_update, C_update)
 
@@ -34,7 +34,7 @@ def apply_filtering_fixed_linear(m0, C0, y, K, n, M, H, Q, R):
     return m, C
 
 @partial(jit, static_argnums=(3))
-def filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R):
+def filter_step_nonlinear(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R):
     """
     Apply a single forecast and Kalman filter step for a non-linear model.
     Returns:
@@ -54,7 +54,7 @@ def apply_filtering_fixed_nonlinear(m0, C0, y, K, n, state_transition_function, 
     """
     Applies the filtering process to estimate the system state over time for a non-linear model.
     """
-    partial_filter_step = lambda m_C_prev, y_curr: filter_step(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R)
+    partial_filter_step = lambda m_C_prev, y_curr: filter_step_nonlinear(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R)
     _, m_C = lax.scan(partial_filter_step, (m0, C0), y)
     m, C = m_C
     return m, C
@@ -65,7 +65,7 @@ def ledoit_wolf(P, shrinkage):
     return (1 - shrinkage) * P + shrinkage * jnp.trace(P)/P.shape[0] * jnp.eye(P.shape[0])
 
 @jit
-def invsqrtm(M):
+def sqrtm(M):
     eigenvalues, eigenvectors = jnp.linalg.eigh(M)
     inv_sqrt_eigenvalues = jnp.sqrt(eigenvalues)
     Lambda_inv_sqrt = jnp.diag(inv_sqrt_eigenvalues)
@@ -83,8 +83,8 @@ def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     P = Pf * localization_matrix  # Element-wise multiplication for localization
     K = P @ H.T @ jnp.linalg.inv(H @ P @ H.T + R)
     x_m += K @ (y - H @ x_m)
-    M_inv_sqrt = invsqrtm(jnp.eye(x_m.shape[0]) - K@H)
-    updated_A = M_inv_sqrt @ A
+    M_sqrt = sqrtm(jnp.eye(x_m.shape[0]) - K@H)
+    updated_A = M_sqrt @ A
     updated_ensemble = x_m.reshape((-1, 1)) + updated_A
     updated_P = (updated_A @ updated_A.T / (n_ensemble - 1))
     updated_P = ledoit_wolf(updated_P, 0.1) #shrinkage

@@ -171,12 +171,12 @@ def plot_ensemble_mean_and_variance(states, observations, state_index, observati
     
 
 
-@partial(jit, static_argnums=(0,))
+@partial(jit, static_argnums=(0))
 def generate_gc_localization_matrix(n, localization_radius):
     """
-    Generate the Gaspari-Cohn (GC) localization matrix for data assimilation.
+    Generate the Gaspari-Cohn (GC) localization matrix
     """
-    i = jnp.arange(n)[:, None]  
+    i = jnp.arange(n)[:,None]
     j = jnp.arange(n) 
     min_modulo_distance = jnp.minimum(jnp.abs(i - j), n - jnp.abs(i - j))
     mask = min_modulo_distance <= localization_radius
