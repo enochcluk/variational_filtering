@@ -54,7 +54,7 @@ def KL_gaussian(n, m1, C1, m2, C2):
     """
     C2_inv = inv(C2)
     log_det_ratio = (jnp.log(eigh(C2)[0]).sum() - jnp.log(eigh(C1)[0]).sum()).real 
-    # log(det(C2) / det(C1)), works better with limited precision because the determinant is practically 0
+    # replace log(det(C2) / det(C1)), works better with limited precision because the determinant is practically 0
     return 0.5 * (log_det_ratio - n + jnp.trace(C2_inv @ C1) + ((m2 - m1).T @ C2_inv @ (m2 - m1)))
 
 
