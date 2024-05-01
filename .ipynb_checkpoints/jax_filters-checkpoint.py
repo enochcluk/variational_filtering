@@ -11,13 +11,13 @@ def filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R):
     Apply a single forecast and Kalman filter step with fixed gain.
     Tuple of updated state estimate (mean) and covariance, both for return and for next step.
     """
-    m_prev, C_prev = m_C_prev
+    _, _, m_prev, C_prev = m_C_prev
     m_pred = M @ m_prev
     C_pred = M @ C_prev @ M.T + Q
     m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
     C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #+ K @ H @ Q @ (K @ H).T
     
-    return (m_update, C_update), (m_update, C_update)
+    return (m_pred, C_pred, m_update, C_update), (m_pred, C_pred, m_update, C_update)
 
 
 @partial(jit, static_argnums=(4))
@@ -29,9 +29,9 @@ def apply_filtering_fixed_linear(m0, C0, y, K, n, M, H, Q, R):
     C: Covariance matrices of the state estimates over time.
     """
     partial_filter_step = lambda m_C_prev, y_curr: filter_step_linear(m_C_prev, y_curr, K, n, M, H, Q, R)
-    _, m_C = lax.scan(partial_filter_step, (m0, C0), y)
-    m, C = m_C
-    return m, C
+    _, m_C = lax.scan(partial_filter_step, (m0, C0, m0, C0), y)
+    m_preds, C_preds, m_updates, C_updates = m_C
+    return m_preds, C_preds, m_updates, C_updates
 
 @partial(jit, static_argnums=(3))
 def filter_step_nonlinear(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R):
@@ -40,13 +40,13 @@ def filter_step_nonlinear(m_C_prev, y_curr, K, n, state_transition_function, jac
     Returns:
     Tuple of updated state estimate (mean) and covariance for both the return and next step.
     """
-    m_prev, C_prev = m_C_prev
+    _, _, m_prev, C_prev = m_C_prev
     m_pred = state_transition_function(m_prev)
     F_jac = jacobian_function(m_prev)
     m_update = (jnp.eye(n) - K @ H) @ m_pred + K @ y_curr
     C_pred = F_jac @ C_prev @ F_jac.T + Q
     C_update = (jnp.eye(n) - K @ H) @ C_pred @ (jnp.eye(n) - K @ H).T + K @ R @ K.T #no discard yet
-    return (m_update, C_update), (m_update, C_update)
+    return (m_pred, C_pred, m_update, C_update), (m_pred, C_pred, m_update, C_update)
 
 
 @partial(jit, static_argnums=(4))
@@ -55,9 +55,9 @@ def apply_filtering_fixed_nonlinear(m0, C0, y, K, n, state_transition_function, 
     Applies the filtering process to estimate the system state over time for a non-linear model.
     """
     partial_filter_step = lambda m_C_prev, y_curr: filter_step_nonlinear(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, H, Q, R)
-    _, m_C = lax.scan(partial_filter_step, (m0, C0), y)
-    m, C = m_C
-    return m, C
+    _, m_C = lax.scan(partial_filter_step, (m0, C0, m0, C0), y)
+    m_preds, C_preds, m_updates, C_updates = m_C
+    return m_preds, C_preds, m_updates, C_updates
 
 
 @jit
@@ -77,10 +77,8 @@ def sqrtm(M):
 def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     n_ensemble = ensemble.shape[1]
     x_m = jnp.mean(ensemble, axis=1)
-    A = ensemble - x_m.reshape((-1, 1))
-    A = A*inflation
-    Pf = localization_matrix*(A @ A.T) / (n_ensemble - 1) + Q
-    P = Pf  # Element-wise multiplication for localization
+    A = (ensemble - x_m.reshape((-1, 1))) * inflation
+    P = localization_matrix*(A @ A.T) / (n_ensemble - 1) + Q
     K = P @ H.T @ jnp.linalg.inv(H @ P @ H.T + R)
     x_m += K @ (y - H @ x_m)
     M_sqrt = sqrtm(jnp.eye(x_m.shape[0]) - K@H)
@@ -88,7 +86,6 @@ def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     updated_ensemble = x_m.reshape((-1, 1)) + updated_A
     updated_P = (updated_A @ updated_A.T / (n_ensemble - 1))
     updated_P = ledoit_wolf(updated_P, 0.1) #shrinkage
-    #updated_P = localization_matrix * updated_P
     return updated_ensemble, updated_P
 
 
@@ -99,14 +96,14 @@ def ensrf_steps(state_transition_function, n_ensemble, ensemble_init, num_steps,
     subkeys = jnp.array(subkeys)
     def inner(carry, t):
         ensemble, previous_covariance = carry
-        ensemble_predicted = model_vmap(ensemble)    
+        ensemble_predicted = model_vmap(ensemble)
         def true_fun(_):
             return ensrf_step(ensemble_predicted, observations[t, :], H, Q, R, localization_matrix, inflation, subkeys[t])  
         def false_fun(_):# Use the last updated covariance if no observation is available
             return ensemble_predicted, previous_covariance
         ensemble_updated, Pf_updated = lax.cond(t % observation_interval == 0, true_fun, false_fun, operand=None)
         return (ensemble_updated, Pf_updated), (ensemble_updated, Pf_updated)
-    n = len(H[0])
+    n = len(Q[0])
     covariance_init = jnp.zeros((n,n))
     _, output = jax.lax.scan(inner, (ensemble_init, covariance_init), jnp.arange(num_steps))
     ensembles, covariances = output
@@ -130,8 +127,6 @@ def kalman_step(state, observation, params):
 def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, observations, H, Q, R):
     params = (state_transition_function, jacobian_function, H, Q, R)
     initial_state = (m0, C0)
-
-    # Execute `lax.scan` over the sequence of observations
     _, (m, C, K) = lax.scan(lambda state, obs: kalman_step(state, obs, params),
                             initial_state, observations)
     

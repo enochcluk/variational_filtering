@@ -57,7 +57,6 @@ def KL_gaussian(n, m1, C1, m2, C2):
     # replace log(det(C2) / det(C1)), works better with limited precision because the determinant is practically 0
     return 0.5 * (log_det_ratio - n + jnp.trace(C2_inv @ C1) + ((m2 - m1).T @ C2_inv @ (m2 - m1)))
 
-
 @jit
 def log_likelihood(v, y, H, R, J, J0):
     """
@@ -72,23 +71,22 @@ def log_likelihood(v, y, H, R, J, J0):
     _, lls = lax.scan(log_likelihood_j, None, (v, y))
     sum_ll = jnp.nansum(lls)
     return -0.5 * sum_ll - 0.5 * (J - J0) * jnp.log(2 * jnp.pi) - 0.5 * (J - sum(jnp.isnan(lls)) - J0) * jnp.linalg.slogdet(R)[1]
-    
 
 @partial(jit, static_argnums=(2,6))
-def KL_sum(m, C, n, state_transition_function, Q, key, N):
+def KL_sum(m_preds, C_preds, m_updates, C_updates, n, state_transition_function, Q, key):
     """
     Computes the sum of KL divergences between the predicted and updated state distributions.
     """
     def KL_j(_, m_C_y):
-        m_prev, m_curr, C_prev, C_curr, key = m_C_y
-        key, *subkeys_inner = random.split(key, num=N)
-        def inner_map(subkey):
-            perturbed_state = m_prev + random.multivariate_normal(subkey, jnp.zeros(n), C_prev)
-            v_pred = state_transition_function(perturbed_state)
-            return KL_gaussian(n, m_curr, C_curr, v_pred, Q)
-        mean_kl = jnp.mean(vmap(inner_map)(jnp.array(subkeys_inner)), axis=0)
-        return _, mean_kl
-    _, mean_kls = scan(KL_j, None, (m[:-1, :], m[1:, :], C[:-1, :, :], C[1:, :, :], jnp.array(random.split(key, num=m.shape[0]-1))))
+        m_pred, C_pred, m_update, C_update = m_C_y
+        #key, *subkeys_inner = random.split(key, num=N)
+        # def inner_map(subkey):
+        #     perturbed_state = m_prev + random.multivariate_normal(subkey, jnp.zeros(n), C_prev)
+        #     v_pred = state_transition_function(perturbed_state)
+        #     return KL_gaussian(n, m_curr, C_curr, v_pred, Q)
+        # mean_kl = jnp.mean(vmap(inner_map)(jnp.array(subkeys_inner)), axis=0)
+        return _, KL_gaussian(n, m_update, C_update, m_pred, C_pred)#_, mean_kl
+    _, mean_kls = scan(KL_j, None, (m_preds, C_preds, m_updates, C_updates))#, jnp.array(random.split(key, num=m.shape[0]-1))))
     kl_sum = jnp.sum(mean_kls)
     return kl_sum
 
