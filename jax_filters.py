@@ -77,7 +77,10 @@ def sqrtm(M):
 def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     n_ensemble = ensemble.shape[1]
     x_m = jnp.mean(ensemble, axis=1)
-    A = (ensemble - x_m.reshape((-1, 1))) * inflation
+    raw_A = (ensemble - x_m.reshape((-1, 1))) 
+    C_pred = (raw_A @ raw_A.T) / (n_ensemble - 1) + Q
+    C_pred = ledoit_wolf(C_pred, 0.1)
+    A = raw_A * inflation
     P = localization_matrix*(A @ A.T) / (n_ensemble - 1) + Q
     K = P @ H.T @ jnp.linalg.inv(H @ P @ H.T + R)
     x_m += K @ (y - H @ x_m)
@@ -86,28 +89,31 @@ def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     updated_ensemble = x_m.reshape((-1, 1)) + updated_A
     updated_P = (updated_A @ updated_A.T / (n_ensemble - 1))
     updated_P = ledoit_wolf(updated_P, 0.1) #shrinkage
-    return updated_ensemble, updated_P
+    return ensemble, C_pred, updated_ensemble, updated_P
 
 
 @partial(jit, static_argnums=(3))
 def ensrf_steps(state_transition_function, n_ensemble, ensemble_init, num_steps, observations, observation_interval, H, Q, R, localization_matrix, inflation, key):
     model_vmap = jax.vmap(lambda v: state_transition_function(v), in_axes=1, out_axes=1)
-    key, *subkeys = random.split(key, num=num_steps+1)
+    key, *subkeys = random.split(key, num=num_steps + 1)
     subkeys = jnp.array(subkeys)
+
     def inner(carry, t):
-        ensemble, previous_covariance = carry
+        ensemble, covar = carry
         ensemble_predicted = model_vmap(ensemble)
         def true_fun(_):
-            return ensrf_step(ensemble_predicted, observations[t, :], H, Q, R, localization_matrix, inflation, subkeys[t])  
-        def false_fun(_):# Use the last updated covariance if no observation is available
-            return ensemble_predicted, previous_covariance
-        ensemble_updated, Pf_updated = lax.cond(t % observation_interval == 0, true_fun, false_fun, operand=None)
-        return (ensemble_updated, Pf_updated), (ensemble_updated, Pf_updated)
+            x_m, C_pred, ensemble_updated, Pf_updated = ensrf_step(ensemble_predicted, observations[t, :], H, Q, R, localization_matrix, inflation, subkeys[t])
+            return x_m, C_pred, ensemble_updated, Pf_updated
+        def false_fun(_): # will require an update for larger observation intervals
+            return ensemble_predicted, covar, ensemble_predicted, covar
+        _, C_pred, ensemble_updated, Pf_updated = lax.cond(t % observation_interval == 0, true_fun, false_fun, operand=None)
+        return (ensemble_updated, Pf_updated), (ensemble_predicted, C_pred, ensemble_updated, Pf_updated)
+
     n = len(Q[0])
-    covariance_init = jnp.zeros((n,n))
-    _, output = jax.lax.scan(inner, (ensemble_init, covariance_init), jnp.arange(num_steps))
-    ensembles, covariances = output
-    return ensembles, covariances
+    covariance_init = jnp.zeros((n, n))
+    _, (ensemble_preds, C_preds, ensembles, covariances) = jax.lax.scan(inner, (ensemble_init, covariance_init), jnp.arange(num_steps))
+
+    return ensemble_preds, C_preds, ensembles, covariances
    
 @jit
 def kalman_step(state, observation, params):
