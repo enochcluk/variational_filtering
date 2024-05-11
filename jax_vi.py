@@ -79,14 +79,8 @@ def KL_sum(m_preds, C_preds, m_updates, C_updates, n, state_transition_function,
     """
     def KL_j(_, m_C_y):
         m_pred, C_pred, m_update, C_update = m_C_y
-        #key, *subkeys_inner = random.split(key, num=N)
-        # def inner_map(subkey):
-        #     perturbed_state = m_prev + random.multivariate_normal(subkey, jnp.zeros(n), C_prev)
-        #     v_pred = state_transition_function(perturbed_state)
-        #     return KL_gaussian(n, m_curr, C_curr, v_pred, Q)
-        # mean_kl = jnp.mean(vmap(inner_map)(jnp.array(subkeys_inner)), axis=0)
-        return _, KL_gaussian(n, m_update, C_update, m_pred, C_pred)#_, mean_kl
-    _, mean_kls = scan(KL_j, None, (m_preds, C_preds, m_updates, C_updates))#, jnp.array(random.split(key, num=m.shape[0]-1))))
+        return _, KL_gaussian(n, m_update, C_update, m_pred, C_pred)
+    _, mean_kls = scan(KL_j, None, (m_preds, C_preds, m_updates, C_updates))
     kl_sum = jnp.sum(mean_kls)
     return kl_sum
 
