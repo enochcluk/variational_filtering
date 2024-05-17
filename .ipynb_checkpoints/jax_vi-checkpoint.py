@@ -79,14 +79,8 @@ def KL_sum(m_preds, C_preds, m_updates, C_updates, n, state_transition_function,
     """
     def KL_j(_, m_C_y):
         m_pred, C_pred, m_update, C_update = m_C_y
-        #key, *subkeys_inner = random.split(key, num=N)
-        # def inner_map(subkey):
-        #     perturbed_state = m_prev + random.multivariate_normal(subkey, jnp.zeros(n), C_prev)
-        #     v_pred = state_transition_function(perturbed_state)
-        #     return KL_gaussian(n, m_curr, C_curr, v_pred, Q)
-        # mean_kl = jnp.mean(vmap(inner_map)(jnp.array(subkeys_inner)), axis=0)
-        return _, KL_gaussian(n, m_update, C_update, m_pred, C_pred)#_, mean_kl
-    _, mean_kls = scan(KL_j, None, (m_preds, C_preds, m_updates, C_updates))#, jnp.array(random.split(key, num=m.shape[0]-1))))
+        return _, KL_gaussian(n, m_update, C_update, m_pred, C_pred)
+    _, mean_kls = scan(KL_j, None, (m_preds, C_preds, m_updates, C_updates))
     kl_sum = jnp.sum(mean_kls)
     return kl_sum
 
@@ -101,53 +95,77 @@ def var_cost(K, m0, C0, n, state_transition_function, Q, jacobian, H, R, y, key,
     return (KL_sum(m, C, K, n, state_transition_function, Q, key, N) - jnp.mean(log_likelihood_vals))
 
 
-def plot_optimization_results(norms, prediction_errors, true_div, n_iters, file_path):
+def plot_optimization_results(norms, prediction_errors, true_div, n_iters, file_path, scaling=1.3, max_n_locator=5):
     """
     norms (list): List of norm values representing norm from reference K.
     prediction_errors (list): List of prediction error values (MSE).
     true_div (list): List of KL divergence values (from Kalman Filter solution).
     n_iters (int): Number of iterations to plot.
     file_path (str): Path to save the plot as a PDF file.
+    scaling (float): Scaling factor for font and label sizes.
+    max_n_locator (int): Maximum number of labels on the y-axis.
     """
     fig, (ax1, ax3) = plt.subplots(figsize=(10, 4), ncols=2)
+    
     # K norms and KL Divergence
     color = 'tab:red'
-    ax1.set_xlabel('Iteration')
-    ax1.set_ylabel('Gain error ($\|K_\mathrm{opt} - K_\mathrm{steady}\|_F$)', color=color)
+    ax1.set_xlabel('Iteration', fontsize=14*scaling)
+    ax1.set_ylabel('Gain error ($\|K_\mathrm{opt} - K_\mathrm{steady}\|_F$)', color=color, fontsize=14*scaling)
     line1, = ax1.plot(range(1, n_iters+1), norms[:n_iters], label='Gain error', color=color)
-    ax1.tick_params(axis='y', labelcolor=color)
+    ax1.tick_params(axis='y', labelcolor=color, labelsize=12*scaling)
+    ax1.tick_params(axis='x', labelsize=12*scaling)
+    ax1.yaxis.set_major_locator(plt.MaxNLocator(max_n_locator))
+
     ax2 = ax1.twinx()
     color_pred = 'tab:green'
-    ax2.set_ylabel('KL divergence to true filter', color=color_pred)
+    ax2.set_ylabel('KL divergence to true filter', color=color_pred, fontsize=14*scaling)
     line2, = ax2.plot(range(1, n_iters+1), true_div[:n_iters], label='KL divergence to true filter', color=color_pred, linestyle='-.')
-    ax2.tick_params(axis='y', labelcolor=color_pred)
+    ax2.tick_params(axis='y', labelcolor=color_pred, labelsize=12*scaling)
+    ax2.tick_params(axis='x', labelsize=12*scaling)
+    ax2.yaxis.set_major_locator(plt.MaxNLocator(max_n_locator))
+
     lines = [line1, line2]
     labels = [line.get_label() for line in lines]
-    ax1.legend(lines, labels, loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes)
+    ax1.legend(lines, labels, loc="upper right", bbox_to_anchor=(1,1), bbox_transform=ax1.transAxes, fontsize=8*scaling)
+
     # MSE from True States
     ax3.plot(range(1, n_iters+1), prediction_errors[:n_iters])
-    ax3.set_xlabel("Iteration")
-    ax3.set_ylabel("Prediction error (MSE)")
+    ax3.set_xlabel("Iteration", fontsize=14*scaling)
+    ax3.set_ylabel("Prediction error (MSE)", fontsize=14*scaling)
+    ax3.tick_params(axis='x', labelsize=12*scaling)
+    ax3.tick_params(axis='y', labelsize=12*scaling)
+    ax3.yaxis.set_major_locator(plt.MaxNLocator(max_n_locator))
+
     plt.tight_layout()
-    plt.show()
     plt.savefig(file_path)
+    plt.show()
     plt.close()
 
-
-def plot_k_matrices(K_steady, K_opt, file_path):
+def plot_k_matrices(K_steady, K_opt, file_path, scaling=1.2, max_n_locator=5):
     fig, (ax1, ax2) = plt.subplots(figsize=(10, 4), ncols=2)
+    
     c1 = ax1.pcolormesh(K_steady, vmin=-0.1, vmax=0.45, cmap='RdBu_r')
-    ax1.set_title('$K_\\mathrm{steady}$')
-    ax1.invert_yaxis()  
-    c2 = ax2.pcolormesh(K_opt, vmin=-0.1, vmax=0.45, cmap='RdBu_r')
-    ax2.set_title('$K_\\mathrm{opt}$')
-    ax2.invert_yaxis() 
-    cb_ax = fig.add_axes([.93, .124, .02, .754]) #add and align colorbar
-    fig.colorbar(c2, orientation='vertical', cax=cb_ax)
-    plt.show()
-    plt.savefig(file_path)
-    plt.close()
+    ax1.set_title('$K_\\mathrm{steady}$', fontsize=14*scaling)
+    ax1.invert_yaxis()
+    ax1.tick_params(axis='x', labelsize=12*scaling)
+    ax1.tick_params(axis='y', labelsize=12*scaling)
+    ax1.yaxis.set_major_locator(plt.MaxNLocator(max_n_locator))
+    fig.colorbar(c1,orientation='vertical')
 
+    c2 = ax2.pcolormesh(K_opt, vmin=-0.1, vmax=0.45, cmap='RdBu_r')
+    ax2.set_title('$K_\\mathrm{opt}$', fontsize=14*scaling)
+    ax2.invert_yaxis()
+    ax2.tick_params(axis='x', labelsize=12*scaling)
+    ax2.tick_params(axis='y', labelsize=12*scaling)
+    ax2.yaxis.set_major_locator(plt.MaxNLocator(max_n_locator))
+
+    #cb_ax = fig.add_axes([.93, .124, .02, .754])  # add and align colorbar
+    fig.colorbar(c2,orientation='vertical')
+
+    plt.tight_layout()
+    plt.savefig(file_path)
+    plt.show()
+    plt.close()
 
 
 
