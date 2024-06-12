@@ -72,7 +72,7 @@ def log_likelihood(v, y, H, R, J, J0):
     sum_ll = jnp.nansum(lls)
     return -0.5 * sum_ll - 0.5 * (J - J0) * jnp.log(2 * jnp.pi) - 0.5 * (J - sum(jnp.isnan(lls)) - J0) * jnp.linalg.slogdet(R)[1]
 
-@partial(jit, static_argnums=(2,6))
+@partial(jit, static_argnums=())
 def KL_sum(m_preds, C_preds, m_updates, C_updates, n, state_transition_function, Q, key):
     """
     Computes the sum of KL divergences between the predicted and updated state distributions.

@@ -137,3 +137,45 @@ def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, 
                             initial_state, observations)
     
     return m, C, K
+
+@jit
+def resample_particles(key, particles, weights):
+    num_particles = particles.shape[0]
+    cumulative_sum = jnp.cumsum(weights)
+    indices = jnp.searchsorted(cumulative_sum, random.uniform(key, (num_particles,)))
+    return particles[indices]
+
+@jit
+def update_weights(particles, observation, H, R):
+    # Calculate the likelihood of each particle given the observation
+    predicted_observations = jax.vmap(lambda x: jnp.dot(H, x), in_axes=0, out_axes=0)(particles)
+    obs_dim = observation.shape[0]
+    inv_R = jnp.linalg.inv(R)
+    diff = observation - predicted_observations
+    likelihood = jnp.exp(-0.5 * jax.vmap(lambda d: jnp.dot(d, jnp.dot(inv_R, d.T)), in_axes=0, out_axes=0)(diff))
+    likelihood = likelihood / likelihood.sum()  # Normalize the weights
+    return likelihood
+
+@partial(jit, static_argnums=(1,2))
+def particle_filter(key, num_particles, num_steps, initial_state, observations, observation_interval, state_transition_function, H, Q, R):
+    mean = jnp.tile(initial_state, (num_particles, 1))
+    particles = random.multivariate_normal(key, mean, Q, shape=(num_particles,))
+    step = jax.vmap(state_transition_function, in_axes=0, out_axes=0)
+    ensemble = []
+    #for now we will assume observation_interval of 1
+    def body_fn(carry, t):
+        key, particles = carry
+        key, subkey = random.split(key)
+        # Transition particles to the next state
+        particles = step(particles) + random.multivariate_normal(subkey, jnp.zeros(particles.shape[1]), Q, shape=(num_particles,))
+        # Update weights and resample every step
+        observation = observations[t]
+        weights = update_weights(particles, observation, H, R)
+        particles = resample_particles(subkey, particles, weights)
+        return (key, particles), particles
+
+    keys_and_particles = jax.lax.scan(body_fn, (key, particles), jnp.arange(num_steps))
+    ensemble = keys_and_particles[1]
+    return jnp.transpose(ensemble, (0, 2, 1))
+    # Transpose to (timestep, state_dim, num_particles)
+
