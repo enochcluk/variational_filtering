@@ -1,12 +1,13 @@
 from jax.scipy.linalg import inv, det, svd
 import jax.numpy as jnp
-from jax import random, jit
+from jax import random, jit, lax, random
 from sklearn.datasets import make_spd_matrix
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import jax
 from functools import partial
-from jax import lax, random
+import pyqg_jax
+from pyqg_jax import qg_model, state, parameterizations, steppers
 
 @jit
 def rk4_step_lorenz96(x, F, dt):
@@ -31,13 +32,26 @@ def kuramoto_sivashinsky_step(x, dt, E, E2, Q, f1, f2, f3, g):
     x_next = jnp.real(jnp.fft.ifft(v_next))
     return x_next
 
-# @jit
-# def lorenz96_step(x, F, dt):
-#     #dxdt = lambda y: (jnp.roll(y, -1) - jnp.roll(y, 2)) * jnp.roll(y, -1) - y + F
-#     return rk4_step_lorenz96(x, F, dt)
 
+@jit
+def pyqg_step(x, init_state, param_model, stepped_model):
+    # Reshape x back to the model's q shape
+    q_shape = init_state.state.model_state.q.shape
+    q = x.reshape(q_shape)
+    # Create a new model state with q using state.update
+    base_state = init_state.state.model_state.update(q=q)
+    # Wrap the new model state through the parameterization
+    wrapped_in_param = param_model.initialize_param_state(base_state)
+    # Initialize the stepper state with the wrapped parameterized state
+    integrator_state = stepped_model.initialize_stepper_state(wrapped_in_param)
+    # Perform one step
+    next_state = stepped_model.step_model(integrator_state)
+    # Extract q from the next state and flatten it
+    q_next = next_state.state.model_state.q
+    x_next = q_next.reshape(-1)
+    return x_next
 
-#models as classes
+# models as classes
 class BaseModel:
     def __init__(self, dt=0.01):
         self.dt = dt
@@ -89,6 +103,31 @@ class KuramotoSivashinsky(BaseModel):
         
     def step(self, x):
         return kuramoto_sivashinsky_step(x, self.dt, self.E, self.E2, self.Q, self.f1, self.f2, self.f3, self.g)
+
+class PyQGModel(BaseModel):
+    def __init__(self, dt=14400.0, nx=64, ny=64):
+        super().__init__(dt)
+        self.nx = nx
+        self.ny = ny
+        self.dt = dt
+        # self.precision = precision
+        self.base_model = qg_model.QGModel(
+            nx=nx,
+            ny=ny,
+            precision = pyqg_jax.state.Precision.DOUBLE,
+        )
+        self.param_model = parameterizations.smagorinsky.apply_parameterization(
+            self.base_model, constant=0.08,
+        )
+        self.stepper = steppers.AB3Stepper(dt=dt)
+        self.stepped_model = steppers.SteppedModel(
+            self.param_model, self.stepper
+        )
+        self.init_state = self.stepped_model.create_initial_state(jax.random.key(0))
+
+
+    def step(self, x):
+        return pyqg_step(x, self.init_state, self.param_model, self.stepped_model)
 
 @jit
 def step_function(carry, input):
