@@ -92,7 +92,7 @@ def ensrf_step(ensemble, y, H, Q, R, localization_matrix, inflation, key):
     return ensemble, C_pred, updated_ensemble, updated_P
 
 
-@partial(jit, static_argnums=(3))
+@partial(jit, static_argnums=(2))
 def ensrf_steps(state_transition_function, ensemble_init, num_steps, observations, observation_interval, H, Q, R, localization_matrix, inflation, key):
     model_vmap = jax.vmap(lambda v: state_transition_function(v), in_axes=1, out_axes=1)
     key, *subkeys = random.split(key, num=num_steps + 1)
