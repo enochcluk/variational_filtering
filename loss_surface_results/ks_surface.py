@@ -48,6 +48,7 @@ def var_cost(radius, inflation, model, ensemble_init, observations, H, Q, R, key
     return cost
 
 def main():
+    return 0
     args = parse_arguments()
     n_ensemble = args.n_ensemble    
     # Initial state

@@ -17,7 +17,7 @@ for model in "${models[@]}"; do
                 # Construct a unique job name based on parameters
                 job_name="${model}_${initialization}_steps${num_steps}_ensemble${n_ensemble}"
 
-                # Write the SBATCH script
+                # Write the SBATCH script - be sure to note the directory location of the python script
                 sbatch --job-name="$job_name" \
                     --time=10:00:00\
                     --output="logs/${job_name}.out" \

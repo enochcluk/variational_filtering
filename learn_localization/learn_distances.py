@@ -16,16 +16,19 @@ import pickle
 from datetime import datetime
 import properscoring
 
+import sys
+import os
+
 
 # Set JAX configuration
 jax.config.update("jax_enable_x64", True)
 
 # Argument parsing
 parser = argparse.ArgumentParser(description="Data assimilation framework")
-parser.add_argument('--model', type=str, choices=['l96', 'ks'], required=True, help="Model to use: 'l96' or 'ks'")
-parser.add_argument('--num_steps', type=int, required=True, help="Number of simulation steps")
-parser.add_argument('--initialization', type=str, choices=['sin', 'cos', 'random'], required=True, help="Initialization method: 'sin', 'cos', or 'random'")
-parser.add_argument('--n_ensemble', type=int, required=True, help="Number of ensemble members")
+parser.add_argument('--model', default = 'ks', type=str, help="Model to use: 'l96' or 'ks'")
+parser.add_argument('--num_steps', default = 100, type=int, help="Number of simulation steps")
+parser.add_argument('--initialization', default = 'sin', type=str, choices=['sin', 'cos', 'random'],  help="Initialization method: 'sin', 'cos', or 'random'")
+parser.add_argument('--n_ensemble', default = 20, type=int, help="Number of ensemble members")
 
 args = parser.parse_args()
 
@@ -78,8 +81,7 @@ def generate_distance_matrix(n, distances):
     j = jnp.arange(n)
     min_modulo_distance = jnp.minimum(jnp.abs(i - j), n - jnp.abs(i - j))
     r = full_distances[min_modulo_distance.astype(int)] 
-    localization_matrix = jnp.exp(-(r**2))
-    return localization_matrix
+    return r
 
 @jit
 def var_cost(distances, inflation, model, ensemble_init, observations, H, Q, R, key, J, J0):
