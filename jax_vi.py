@@ -95,6 +95,20 @@ def var_cost(K, m0, C0, n, state_transition_function, Q, jacobian, H, R, y, key,
     return (KL_sum(m, C, K, n, state_transition_function, Q, key, N) - jnp.mean(log_likelihood_vals))
 
 
+@jit
+def energy_score(obs, fct, eps=1e-8):
+    #  based on scoringrules library
+    M = fct.shape[-2]  # Get ensemble size (M)
+    obs = jnp.expand_dims(obs, axis=-2)  # Expand obs to match ensemble
+    # Safe norm computation
+    def safe_norm(x):
+        return jnp.sqrt(jnp.sum(x**2, axis=-1) + eps)
+    e_1 = jnp.sum(safe_norm(fct - obs)) / M
+    e_2 = jnp.sum(safe_norm(fct[:, :, None, :] - fct[:, None, :, :])) / (M**2)
+
+    return e_1 - 0.5 * e_2
+
+
 def plot_optimization_results(norms, prediction_errors, true_div, n_iters, file_path, scaling=1.3, max_n_locator=5):
     """
     norms (list): List of norm values representing norm from reference K.
