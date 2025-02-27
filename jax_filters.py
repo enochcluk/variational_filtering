@@ -60,6 +60,43 @@ def apply_filtering_fixed_nonlinear(m0, C0, y, K, n, state_transition_function, 
     return m_preds, C_preds, m_updates, C_updates
 
 
+@partial(jit, static_argnums=(3))
+def filter_step_nonlinear_H(m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, observation_function, observation_jacobian, Q, R):
+    """
+    Apply a single forecast and Kalman filter step for a non-linear model.
+    """
+    _, _, m_prev, C_prev = m_C_prev
+    m_pred = state_transition_function(m_prev)
+    F_jac = jacobian_function(m_prev)
+    
+    # Nonlinear observation
+    H_x_pred = observation_function(m_pred)
+    H_jac = observation_jacobian(m_pred)  # Jacobian of H(x)
+
+    # Compute predicted covariance
+    C_pred = F_jac @ C_prev @ F_jac.T + Q
+    S = H_jac @ C_pred @ H_jac.T + R  # Innovation covariance
+    K_curr = C_pred @ H_jac.T @ jnp.linalg.inv(S)  # Kalman Gain
+
+    # Update state estimate and covariance
+    m_update = m_pred + K_curr @ (y_curr - H_x_pred)
+    C_update = (jnp.eye(n) - K_curr @ H_jac) @ C_pred
+
+    return (m_pred, C_pred, m_update, C_update), (m_pred, C_pred, m_update, C_update)
+
+@partial(jit, static_argnums=(4))
+def apply_filtering_fixed_nonlinear_H(m0, C0, y, K, n, state_transition_function, jacobian_function, observation_function, observation_jacobian, Q, R):
+    """
+    Applies the filtering process to estimate the system state over time for a non-linear model.
+    """
+    partial_filter_step = lambda m_C_prev, y_curr: filter_step_nonlinear(
+        m_C_prev, y_curr, K, n, state_transition_function, jacobian_function, observation_function, observation_jacobian, Q, R
+    )
+    _, m_C = lax.scan(partial_filter_step, (m0, C0, m0, C0), y)
+    m_preds, C_preds, m_updates, C_updates = m_C
+    return m_preds, C_preds, m_updates, C_updates
+
+
 @jit
 def ledoit_wolf(P, shrinkage):
     return (1 - shrinkage) * P + shrinkage * jnp.trace(P)/P.shape[0] * jnp.eye(P.shape[0])
@@ -114,6 +151,66 @@ def ensrf_steps(state_transition_function, ensemble_init, num_steps, observation
     _, (ensemble_preds, C_preds, ensembles, covariances) = jax.lax.scan(inner, (ensemble_init, covariance_init), jnp.arange(num_steps))
 
     return ensemble_preds, C_preds, ensembles, covariances
+
+@jit
+def ensrf_step_H(ensemble, y, observation_function, observation_jacobian, Q, R, localization_matrix, inflation, key):
+    n_ensemble = ensemble.shape[1]
+    x_m = jnp.mean(ensemble, axis=1)
+    raw_A = (ensemble - x_m.reshape((-1, 1))) 
+
+    # Compute predicted covariance
+    C_pred = (raw_A @ raw_A.T) / (n_ensemble - 1) + Q
+    C_pred = ledoit_wolf(C_pred, 0.1)
+    
+    A = raw_A * inflation
+    P = localization_matrix * (A @ A.T) / (n_ensemble - 1) + Q
+    
+    # Apply nonlinear observation
+    H_x_pred = observation_function(x_m)
+    H_jac = observation_jacobian(x_m)  # Compute Jacobian for Kalman gain
+    
+    S = H_jac @ P @ H_jac.T + R  # Innovation covariance
+    K = P @ H_jac.T @ jnp.linalg.inv(S)  # Kalman gain
+
+    x_m += K @ (y - H_x_pred)
+    
+    M_sqrt = sqrtm(jnp.eye(x_m.shape[0]) - K @ H_jac)
+    updated_A = M_sqrt @ A
+    updated_ensemble = x_m.reshape((-1, 1)) + updated_A
+    
+    updated_P = (updated_A @ updated_A.T / (n_ensemble - 1))
+    updated_P = ledoit_wolf(updated_P, 0.1)  # Shrinkage
+
+    return ensemble, C_pred, updated_ensemble, updated_P
+
+@partial(jit, static_argnums=(2))
+def ensrf_steps_H(state_transition_function, ensemble_init, num_steps, observations, observation_interval, observation_function, observation_jacobian, Q, R, localization_matrix, inflation, key):
+    model_vmap = jax.vmap(lambda v: state_transition_function(v), in_axes=1, out_axes=1)
+    key, *subkeys = random.split(key, num=num_steps + 1)
+    subkeys = jnp.array(subkeys)
+
+    def inner(carry, t):
+        ensemble, covar = carry
+        ensemble_predicted = model_vmap(ensemble)
+        
+        def true_fun(_):
+            x_m, C_pred, ensemble_updated, Pf_updated = ensrf_step_H(
+                ensemble_predicted, observations[t, :], observation_function, observation_jacobian, Q, R, localization_matrix, inflation, subkeys[t]
+            )
+            return x_m, C_pred, ensemble_updated, Pf_updated
+        
+        def false_fun(_):
+            return ensemble_predicted, covar, ensemble_predicted, covar
+
+        _, C_pred, ensemble_updated, Pf_updated = lax.cond(t % observation_interval == 0, true_fun, false_fun, operand=None)
+        
+        return (ensemble_updated, Pf_updated), (ensemble_predicted, C_pred, ensemble_updated, Pf_updated)
+
+    n = len(Q[0])
+    covariance_init = jnp.zeros((n, n))
+    _, (ensemble_preds, C_preds, ensembles, covariances) = jax.lax.scan(inner, (ensemble_init, covariance_init), jnp.arange(num_steps))
+
+    return ensemble_preds, C_preds, ensembles, covariances
    
 @jit
 def kalman_step(state, observation, params):
@@ -127,16 +224,63 @@ def kalman_step(state, observation, params):
     m_update = m_pred + K_curr @ (observation - H @ m_pred)
     C_update = (jnp.eye(H.shape[1]) - K_curr @ H) @ C_pred
     
-    return (m_update, C_update), (m_update, C_update, K_curr)
+    return (m_update, C_update), (m_pred, C_pred, m_update, C_update, K_curr)
 
 @jit
 def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, observations, H, Q, R):
     params = (state_transition_function, jacobian_function, H, Q, R)
     initial_state = (m0, C0)
-    _, (m, C, K) = lax.scan(lambda state, obs: kalman_step(state, obs, params),
-                            initial_state, observations)
     
-    return m, C, K
+    # Modified scan to capture both prediction and analysis states
+    _, (m_preds, C_preds, m_updates, C_updates, Ks) = lax.scan(
+        lambda state, obs: kalman_step(state, obs, params),
+        initial_state, 
+        observations
+    )
+    
+    return m_preds, C_preds, m_updates, C_updates, Ks
+
+@jit
+def kalman_step_H(state, observation, params):
+    """
+    Performs a single Kalman filter update step using a nonlinear observation function H(x).
+    """
+    m_prev, C_prev = state
+    state_transition_function, jacobian_function, observation_function, observation_jacobian, Q, R = params
+    
+    # Prediction step
+    m_pred = state_transition_function(m_prev)
+    F_jac = jacobian_function(m_prev)
+    C_pred = F_jac @ C_prev @ F_jac.T + Q
+    
+    # Compute nonlinear observation and its Jacobian
+    H_x_pred = observation_function(m_pred)  # Apply H(x)
+    H_jac = observation_jacobian(m_pred)  # Compute Jacobian of H(x)
+
+    # Update step
+    S = H_jac @ C_pred @ H_jac.T + R  # Innovation covariance
+    K_curr = C_pred @ H_jac.T @ jnp.linalg.inv(S)  # Kalman gain
+    m_update = m_pred + K_curr @ (observation - H_x_pred)  # Update mean
+    C_update = (jnp.eye(H_jac.shape[1]) - K_curr @ H_jac) @ C_pred  # Update covariance
+    
+    return (m_update, C_update), (m_update, C_update, K_curr)
+
+@jit
+def kalman_filter_process_H(state_transition_function, jacobian_function, m0, C0, observations, observation_function, observation_jacobian, Q, R):
+    """
+    Extended Kalman Filter process with nonlinear observation function H(x).
+    """
+    params = (state_transition_function, jacobian_function, observation_function, observation_jacobian, Q, R)
+    initial_state = (m0, C0)
+    
+    _, (m_preds, C_preds, m_updates, C_updates, Ks) = lax.scan(
+        lambda state, obs: kalman_step_H(state, obs, params),
+        initial_state, 
+        observations
+    )
+    
+    return m_preds, C_preds, m_updates, C_updates, Ks
+
 
 @jit
 def resample_particles(key, particles, weights):

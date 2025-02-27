@@ -165,7 +165,45 @@ def generate_true_states(key, num_steps, n, x0, H, Q, R, model_step, observation
     observations = jnp.vstack([initial_observation[jnp.newaxis, :], observations])
     return observations, xs
 
+@partial(jit, static_argnums=(1, 2, 7, 8))
+def generate_true_states_H(key, num_steps, n, x0, observation_function, Q, R, model_step, observation_interval):
+    """
+    Generates true states and observations using a nonlinear observation function H(x).
+    """
+    initial_carry = (key, x0, observation_interval, observation_function, Q, R, model_step, 1)
+    
+    def step_function(carry, _):
+        key, x, obs_interval, observation_function, Q, R, model_step, counter = carry
+        key, subkey = random.split(key)
+        
+        # Transition step
+        x_next = model_step(x) + random.multivariate_normal(subkey, jnp.zeros(n), Q)
 
+        # Observation step
+        def update_observation():
+            key_obs, subkey_obs = random.split(key)
+            obs = observation_function(x_next) + random.multivariate_normal(subkey_obs, jnp.zeros(R.shape[0]), R)
+            return obs
+        
+        def no_observation():
+            return jnp.full((R.shape[0],), jnp.nan)  # NaNs for missing observations
+        
+        observation = lax.cond(counter % obs_interval == 0, update_observation, no_observation)
+        
+        counter += 1
+        return (key, x_next, obs_interval, observation_function, Q, R, model_step, counter), (x_next, observation)
+
+    _, (xs, observations) = lax.scan(step_function, initial_carry, None, length=num_steps - 1)
+
+    key, subkey = random.split(key)
+    initial_observation = observation_function(x0) + random.multivariate_normal(subkey, jnp.zeros(R.shape[0]), R)
+    
+    # Stack initial state and observations
+    xs = jnp.vstack([x0[jnp.newaxis, :], xs])
+    observations = jnp.vstack([initial_observation[jnp.newaxis, :], observations])
+
+    return observations, xs
+    
 
 def visualize_observations(observations):
     observation_values = observations.T  # Transpose for plotting
