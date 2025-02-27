@@ -211,33 +211,35 @@ def ensrf_steps_H(state_transition_function, ensemble_init, num_steps, observati
     _, (ensemble_preds, C_preds, ensembles, covariances) = jax.lax.scan(inner, (ensemble_init, covariance_init), jnp.arange(num_steps))
 
     return ensemble_preds, C_preds, ensembles, covariances
-   
-@jit
-def kalman_step(state, observation, params):
-    m_prev, C_prev = state
-    state_transition_function, jacobian_function, H, Q, R = params
-    m_pred = state_transition_function(m_prev)
-    F_jac = jacobian_function(m_prev)
-    C_pred = F_jac @ C_prev @ F_jac.T + Q
-    S = H @ C_pred @ H.T + R
-    K_curr = C_pred @ H.T @ jnp.linalg.inv(S)
-    m_update = m_pred + K_curr @ (observation - H @ m_pred)
-    C_update = (jnp.eye(H.shape[1]) - K_curr @ H) @ C_pred
-    
-    return (m_update, C_update), (m_pred, C_pred, m_update, C_update, K_curr)
 
+# this the generalized nonlinear filter, with observation interval functionality
 @jit
-def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, observations, H, Q, R):
-    params = (state_transition_function, jacobian_function, H, Q, R)
+def kalman_filter_process(state_transition_function, jacobian_function, m0, C0, observations, H, Q, R, observation_interval):
+    params = (jacobian_function, H, Q, R)
     initial_state = (m0, C0)
-    
-    # Modified scan to capture both prediction and analysis states
+
+    def step_fn(carry, t):
+        m_prev, C_prev = carry
+        m_pred = state_transition_function(m_prev)
+        F_jac = jacobian_function(m_prev)
+        C_pred = F_jac @ C_prev @ F_jac.T + Q
+
+        def true_fun(_):
+            S = H @ C_pred @ H.T + R
+            K_curr = C_pred @ H.T @ jnp.linalg.inv(S)
+            m_update = m_pred + K_curr @ (observations[t, :] - H @ m_pred)
+            C_update = (jnp.eye(H.shape[1]) - K_curr @ H) @ C_pred
+            return (m_update, C_update), (m_pred, C_pred, m_update, C_update, K_curr)
+
+        def false_fun(_):
+            return (m_pred, C_pred), (m_pred, C_pred, m_pred, C_pred, jnp.zeros((C_pred.shape[0], H.shape[0])))
+
+        return lax.cond(t % observation_interval == 0, true_fun, false_fun, operand=None)
+
     _, (m_preds, C_preds, m_updates, C_updates, Ks) = lax.scan(
-        lambda state, obs: kalman_step(state, obs, params),
-        initial_state, 
-        observations
+        step_fn, initial_state, jnp.arange(observations.shape[0])
     )
-    
+
     return m_preds, C_preds, m_updates, C_updates, Ks
 
 @jit
@@ -300,26 +302,26 @@ def update_weights(particles, observation, H, R):
     likelihood = likelihood / likelihood.sum()  # Normalize the weights
     return likelihood
 
-@partial(jit, static_argnums=(1,2))
-def particle_filter(key, num_particles, num_steps, initial_state, observations, observation_interval, state_transition_function, H, Q, R):
+@partial(jit, static_argnums=(1, 2, 5))  
+def particle_filter(key, num_particles, num_steps, initial_state, observations, observation_interval, 
+                    state_transition_function, H, Q, R):
     mean = jnp.tile(initial_state, (num_particles, 1))
     particles = random.multivariate_normal(key, mean, Q, shape=(num_particles,))
     step = jax.vmap(state_transition_function, in_axes=0, out_axes=0)
-    ensemble = []
-    #for now we will assume observation_interval of 1
+
     def body_fn(carry, t):
         key, particles = carry
         key, subkey = random.split(key)
-        # Transition particles to the next state
         particles = step(particles) + random.multivariate_normal(subkey, jnp.zeros(particles.shape[1]), Q, shape=(num_particles,))
-        # Update weights and resample every step
-        observation = observations[t]
-        weights = update_weights(particles, observation, H, R)
-        particles = resample_particles(subkey, particles, weights)
+        # Only update weights and resample at observation intervals
+        def update_and_resample(particles):
+            obs_idx = t // observation_interval
+            observation = observations[obs_idx]
+            weights = update_weights(particles, observation, H, R)
+            return resample_particles(subkey, particles, weights)
+        particles = lax.cond(t % observation_interval == 0, update_and_resample, lambda x: x, particles)
         return (key, particles), particles
-
-    keys_and_particles = jax.lax.scan(body_fn, (key, particles), jnp.arange(num_steps))
-    ensemble = keys_and_particles[1]
-    return jnp.transpose(ensemble, (0, 2, 1))
-    # Transpose to (timestep, state_dim, num_particles)
+    _, ensemble = lax.scan(body_fn, (key, particles), jnp.arange(num_steps))
+    
+    return jnp.transpose(ensemble, (0, 2, 1))  # (timestep, state_dim, num_particles)
 
